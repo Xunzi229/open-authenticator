@@ -6,7 +6,7 @@ fn entry() -> Result<keyring::Entry, String> {
 }
 
 pub fn enabled() -> bool {
-    entry().and_then(|e| e.get_password().map(|_| true)).unwrap_or(false)
+    entry().ok().and_then(|e| e.get_password().ok()).is_some()
 }
 
 pub fn store(password: &str) -> Result<(), String> {
@@ -102,6 +102,9 @@ fn verify_for_window(
     use windows::Win32::System::WinRT::IUserConsentVerifierInterop;
     use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
 
+    use windows::Foundation::IAsyncOperation;
+    use windows::Security::Credentials::UI::UserConsentVerificationResult;
+
     let interop: IUserConsentVerifierInterop =
         factory::<UserConsentVerifier, IUserConsentVerifierInterop>()?;
     let mut target = HWND(hwnd as *mut core::ffi::c_void);
@@ -109,6 +112,7 @@ fn verify_for_window(
     if !fg.0.is_null() {
         target = fg;
     }
-    let op = unsafe { interop.RequestVerificationForWindowAsync(target, msg)? };
+    let op: IAsyncOperation<UserConsentVerificationResult> =
+        unsafe { interop.RequestVerificationForWindowAsync(target, msg)? };
     op.get()
 }
