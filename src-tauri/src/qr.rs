@@ -280,3 +280,213 @@ pub fn decode_image(bytes: &[u8]) -> Result<Vec<QrAccount>, String> {
     }
     Err(last)
 }
+
+pub fn otpauth_uri(a: &QrAccount) -> String {
+    let label = if a.issuer.is_empty() {
+        a.name.clone()
+    } else if a.name.is_empty() {
+        a.issuer.clone()
+    } else {
+        format!("{}:{}", a.issuer, a.name)
+    };
+    let mut q = format!(
+        "secret={}&algorithm={}&digits={}&period={}",
+        a.secret.replace(' ', ""),
+        a.algorithm,
+        a.digits,
+        a.period
+    );
+    if !a.issuer.is_empty() {
+        q.push_str("&issuer=");
+        q.push_str(&enc(&a.issuer));
+    }
+    format!("otpauth://totp/{}?{}", enc(&label), q)
+}
+
+fn enc(s: &str) -> String {
+    percent_encoding::utf8_percent_encode(s, percent_encoding::NON_ALPHANUMERIC).to_string()
+}
+
+fn secret_bytes(secret: &str) -> Result<Vec<u8>, String> {
+    let cleaned: String = secret
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .map(|c| c.to_ascii_uppercase())
+        .collect();
+    if cleaned.is_empty() {
+        return Err("缺少密钥".into());
+    }
+    if let Ok(b) = BASE32_NOPAD.decode(cleaned.as_bytes()) {
+        if !b.is_empty() {
+            return Ok(b);
+        }
+    }
+    let mut padded = cleaned;
+    while padded.len() % 8 != 0 {
+        padded.push('=');
+    }
+    data_encoding::BASE32
+        .decode(padded.as_bytes())
+        .map_err(|_| "密钥无效".into())
+}
+
+fn write_varint(out: &mut Vec<u8>, mut v: u64) {
+    loop {
+        let mut b = (v & 0x7f) as u8;
+        v >>= 7;
+        if v != 0 {
+            b |= 0x80;
+        }
+        out.push(b);
+        if v == 0 {
+            break;
+        }
+    }
+}
+
+fn write_len(out: &mut Vec<u8>, field: u32, data: &[u8]) {
+    write_varint(out, u64::from(field << 3 | 2));
+    write_varint(out, data.len() as u64);
+    out.extend_from_slice(data);
+}
+
+fn write_var(out: &mut Vec<u8>, field: u32, v: u64) {
+    write_varint(out, u64::from(field << 3));
+    write_varint(out, v);
+}
+
+fn encode_otp_msg(a: &QrAccount) -> Result<Vec<u8>, String> {
+    let mut m = Vec::new();
+    write_len(&mut m, 1, &secret_bytes(&a.secret)?);
+    if !a.name.is_empty() {
+        write_len(&mut m, 2, a.name.as_bytes());
+    }
+    if !a.issuer.is_empty() {
+        write_len(&mut m, 3, a.issuer.as_bytes());
+    }
+    let algo = match a.algorithm.to_ascii_uppercase().replace('-', "").as_str() {
+        "SHA256" => 2u64,
+        "SHA512" => 3,
+        _ => 1,
+    };
+    write_var(&mut m, 4, algo);
+    write_var(&mut m, 5, if a.digits == 8 { 2 } else { 1 });
+    write_var(&mut m, 6, 2);
+    Ok(m)
+}
+
+pub fn migration_uri(accounts: &[QrAccount], batch_index: usize, batch_size: usize) -> Result<String, String> {
+    let mut payload = Vec::new();
+    for a in accounts {
+        write_len(&mut payload, 1, &encode_otp_msg(a)?);
+    }
+    write_var(&mut payload, 2, 1);
+    write_var(&mut payload, 3, batch_size as u64);
+    write_var(&mut payload, 4, batch_index as u64);
+    write_var(&mut payload, 5, 1);
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&payload);
+    Ok(format!(
+        "otpauth-migration://offline?data={}",
+        b64.replace('+', "%2B")
+    ))
+}
+
+pub fn qr_svg(text: &str) -> Result<String, String> {
+    let code = qrcode::QrCode::with_error_correction_level(text.as_bytes(), qrcode::EcLevel::L)
+        .map_err(|_| "二维码内容过长，请减少账号后重试")?;
+    Ok(code
+        .render::<qrcode::render::svg::Color>()
+        .min_dimensions(240, 240)
+        .dark_color(qrcode::render::svg::Color("#111111"))
+        .light_color(qrcode::render::svg::Color("#ffffff"))
+        .quiet_zone(true)
+        .build())
+}
+
+pub fn migration_qrs(accounts: &[QrAccount]) -> Result<Vec<(String, usize)>, String> {
+    if accounts.is_empty() {
+        return Err("没有可导出的账号".into());
+    }
+    let mut size = 10usize.min(accounts.len());
+    loop {
+        let mut out = Vec::new();
+        let chunks: Vec<&[QrAccount]> = accounts.chunks(size).collect();
+        let total = chunks.len();
+        let mut ok = true;
+        for (i, chunk) in chunks.iter().enumerate() {
+            let uri = migration_uri(chunk, i, total)?;
+            match qr_svg(&uri) {
+                Ok(svg) => out.push((svg, chunk.len())),
+                Err(_) => {
+                    ok = false;
+                    break;
+                }
+            }
+        }
+        if ok {
+            return Ok(out);
+        }
+        if size <= 1 {
+            return Err("无法生成转移二维码".into());
+        }
+        size -= 1;
+    }
+}
+
+pub fn parse_text(text: &str) -> Result<Vec<QrAccount>, String> {
+    let t = text.trim();
+    if t.starts_with('[') || t.starts_with('{') {
+        return parse_json(t);
+    }
+    let mut all = Vec::new();
+    for line in t.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if line.starts_with("otpauth") {
+            all.extend(parse_uri(line)?);
+        }
+    }
+    if all.is_empty() {
+        Err("没有可导入的账号".into())
+    } else {
+        Ok(all)
+    }
+}
+
+fn parse_json(text: &str) -> Result<Vec<QrAccount>, String> {
+    let v: serde_json::Value = serde_json::from_str(text).map_err(|_| "JSON 无法解析")?;
+    let arr = if v.is_array() {
+        v.as_array().cloned().unwrap_or_default()
+    } else {
+        v.get("accounts")
+            .and_then(|x| x.as_array())
+            .cloned()
+            .ok_or_else(|| "JSON 里没有 accounts".to_string())?
+    };
+    let mut out = Vec::new();
+    for item in arr {
+        if let Some(uri) = item.get("uri").and_then(|x| x.as_str()) {
+            out.extend(parse_uri(uri)?);
+            continue;
+        }
+        let secret = item["secret"].as_str().unwrap_or("").to_string();
+        if secret.is_empty() {
+            continue;
+        }
+        out.push(QrAccount {
+            issuer: item["issuer"].as_str().unwrap_or("").into(),
+            name: item["name"].as_str().unwrap_or("").into(),
+            secret,
+            algorithm: item["algorithm"].as_str().unwrap_or("SHA1").into(),
+            digits: item["digits"].as_u64().unwrap_or(6) as u32,
+            period: item["period"].as_u64().unwrap_or(30),
+        });
+    }
+    if out.is_empty() {
+        Err("JSON 里没有账号".into())
+    } else {
+        Ok(out)
+    }
+}

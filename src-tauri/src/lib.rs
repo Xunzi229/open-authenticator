@@ -152,6 +152,69 @@ fn import_qr(state: State<AppState>, image_b64: String) -> Result<Value, String>
     ok(json!({ "count": count }))
 }
 
+fn to_qr(a: &Account) -> qr::QrAccount {
+    qr::QrAccount {
+        issuer: a.issuer.clone(),
+        name: a.name.clone(),
+        secret: a.secret.clone(),
+        algorithm: a.algorithm.clone(),
+        digits: a.digits,
+        period: a.period,
+    }
+}
+
+#[tauri::command]
+fn import_text(state: State<AppState>, text: String) -> Result<Value, String> {
+    let items = qr::parse_text(&text)?;
+    let count = state.vault.lock().map_err(|e| e.to_string())?.add_many(items)?;
+    ok(json!({ "count": count }))
+}
+
+#[tauri::command]
+fn export_data(state: State<AppState>) -> Result<Value, String> {
+    let mut v = state.vault.lock().map_err(|e| e.to_string())?;
+    let accounts = v.accounts()?;
+    let qrs: Vec<qr::QrAccount> = accounts.iter().map(to_qr).collect();
+    let json_acc: Vec<Value> = qrs
+        .iter()
+        .map(|a| {
+            json!({
+                "issuer": a.issuer,
+                "name": a.name,
+                "secret": a.secret,
+                "algorithm": a.algorithm,
+                "digits": a.digits,
+                "period": a.period,
+                "uri": qr::otpauth_uri(a)
+            })
+        })
+        .collect();
+    let txt = qrs.iter().map(qr::otpauth_uri).collect::<Vec<_>>().join("\n");
+    let images = if qrs.is_empty() {
+        vec![]
+    } else {
+        qr::migration_qrs(&qrs)?
+            .into_iter()
+            .enumerate()
+            .map(|(i, (svg, count))| json!({ "svg": svg, "index": i, "count": count }))
+            .collect()
+    };
+    ok(json!({
+        "json": serde_json::to_string_pretty(&json_acc).unwrap_or_default(),
+        "txt": txt,
+        "qrs": images,
+        "total": qrs.len()
+    }))
+}
+
+#[tauri::command]
+fn account_qr(state: State<AppState>, id: String) -> Result<Value, String> {
+    let acc = state.vault.lock().map_err(|e| e.to_string())?.get(&id)?;
+    let q = to_qr(&acc);
+    let uri = qr::otpauth_uri(&q);
+    ok(json!({ "uri": uri, "svg": qr::qr_svg(&uri)? }))
+}
+
 #[derive(Deserialize)]
 struct SettingsIn {
     webdav_url: Option<String>,
@@ -215,8 +278,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             status, setup, unlock, lock, snapshot, get_account, add_account, update_account,
-            delete_account, import_uri, import_qr, save_settings, change_password, webdav_upload,
-            webdav_download
+            delete_account, import_uri, import_qr, import_text, export_data, account_qr,
+            save_settings, change_password, webdav_upload, webdav_download
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

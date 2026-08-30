@@ -9,6 +9,7 @@
 <body>
   <section id="gate" class="screen">
     <div class="card">
+      <div class="logo-mark">验</div>
       <div class="logo">验证器</div>
       <p class="sub" id="gate-sub">主密码解锁</p>
       <form id="gate-form">
@@ -25,21 +26,37 @@
   </section>
   <section id="app" class="screen hidden">
     <header class="head">
-      <div class="title">验证码<small>点账号复制 · 点验证码显示</small></div>
-      <div class="ring" id="ring">
-        <svg viewBox="0 0 36 36">
-          <circle class="track" cx="18" cy="18" r="15.5"></circle>
-          <circle class="prog" cx="18" cy="18" r="15.5"></circle>
-        </svg>
-        <span class="num" id="remain">--</span>
+      <div class="title">
+        <h1>验证码</h1>
+        <p>点验证码显示 · 点右侧复制</p>
       </div>
-      <button type="button" class="icon-btn" id="btn-lock">锁定</button>
+      <div class="head-right">
+        <div class="ring" id="ring">
+          <svg viewBox="0 0 36 36">
+            <circle class="track" cx="18" cy="18" r="15.5"></circle>
+            <circle class="prog" cx="18" cy="18" r="15.5"></circle>
+          </svg>
+          <span class="num" id="remain">--</span>
+        </div>
+        <button type="button" class="icon-btn" id="btn-lock" title="锁定">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>
+        </button>
+      </div>
     </header>
     <div class="toolbar">
-      <input id="q" type="search" placeholder="搜索" />
-      <button type="button" class="icon-btn" id="btn-add">+</button>
-      <button type="button" class="icon-btn" id="btn-qr">QR</button>
-      <button type="button" class="icon-btn" id="btn-set">设</button>
+      <div class="search">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3-3"/></svg>
+        <input id="q" type="search" placeholder="搜索" />
+      </div>
+      <button type="button" class="icon-btn" id="btn-add" title="添加">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+      </button>
+      <button type="button" class="icon-btn" id="btn-io" title="导入导出">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12"/><path d="M8 7l4-4 4 4"/><path d="M5 15v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3"/></svg>
+      </button>
+      <button type="button" class="icon-btn" id="btn-set" title="设置">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9c.3.6.9 1 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+      </button>
     </div>
     <div class="list" id="list"></div>
   </section>
