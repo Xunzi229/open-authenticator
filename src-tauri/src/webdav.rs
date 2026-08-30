@@ -218,8 +218,7 @@ pub fn put(
 pub fn get(base: &str, path: &str, user: &str, pass: &str) -> Result<Download, String> {
     let (_, dest) = target(base, path)?;
     let client = client()?;
-    get_optional(&client, &dest, user, pass)?
-        .ok_or_else(|| "WebDAV 远程保险库不存在".to_string())
+    get_optional(&client, &dest, user, pass)?.ok_or_else(|| "WebDAV 远程保险库不存在".to_string())
 }
 
 #[cfg(test)]
