@@ -464,7 +464,10 @@ fn change_password(
     let old = Zeroizing::new(old);
     let new_password = Zeroizing::new(new_password);
     let confirm = Zeroizing::new(confirm);
+    #[cfg(windows)]
     let mut old_bio = bio::stored_password()?;
+    #[cfg(not(windows))]
+    let mut old_bio: Option<String> = None;
     if old_bio.is_some() {
         bio::store(&new_password)?;
     }
