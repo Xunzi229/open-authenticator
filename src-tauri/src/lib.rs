@@ -1,9 +1,11 @@
+mod bio;
 mod crypto;
 mod qr;
 mod totp;
 mod vault;
 mod webdav;
 
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
@@ -12,7 +14,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{Manager, State};
+use tauri::{Manager, State, WebviewWindow};
 use vault::{Account, Vault, MIN_PASSWORD};
 
 static QUITTING: AtomicBool = AtomicBool::new(false);
@@ -63,6 +65,43 @@ pub struct AppState {
     vault: Mutex<Vault>,
 }
 
+fn window_hwnd(window: &WebviewWindow) -> isize {
+    #[cfg(windows)]
+    {
+        window
+            .hwnd()
+            .ok()
+            .map(|h| {
+                let p: *mut std::ffi::c_void = unsafe { std::mem::transmute_copy(&h) };
+                p as isize
+            })
+            .unwrap_or(0)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = window;
+        0
+    }
+}
+
+fn bio_password(window: &WebviewWindow, message: &str) -> Result<String, String> {
+    bio::prompt(window_hwnd(window), message)?;
+    bio::take()
+}
+
+fn resolve_password(
+    window: &WebviewWindow,
+    password: String,
+    biometric: bool,
+    message: &str,
+) -> Result<String, String> {
+    if biometric {
+        bio_password(window, message)
+    } else {
+        Ok(password)
+    }
+}
+
 fn ok(extra: Value) -> Result<Value, String> {
     let mut v = extra;
     if let Some(obj) = v.as_object_mut() {
@@ -79,7 +118,9 @@ fn status(state: State<AppState>) -> Result<Value, String> {
     ok(json!({
         "exists": v.exists(),
         "unlocked": v.unlocked(),
-        "min_password": MIN_PASSWORD
+        "min_password": MIN_PASSWORD,
+        "bio_available": bio::available(),
+        "bio_enabled": bio::enabled()
     }))
 }
 
@@ -169,8 +210,24 @@ fn add_account(state: State<AppState>, data: Value) -> Result<Value, String> {
 }
 
 #[tauri::command]
-fn update_account(state: State<AppState>, id: String, data: Value) -> Result<Value, String> {
-    state.vault.lock().map_err(|e| e.to_string())?.update(&id, account_from(data))?;
+fn update_account(
+    window: WebviewWindow,
+    state: State<AppState>,
+    id: String,
+    data: Value,
+    password: String,
+    biometric: bool,
+) -> Result<Value, String> {
+    let mut v = state.vault.lock().map_err(|e| e.to_string())?;
+    if !data["secret"].as_str().unwrap_or("").trim().is_empty() {
+        drop(v);
+        let pw = resolve_password(&window, password, biometric, "验证身份以更改密钥")?;
+        let mut v = state.vault.lock().map_err(|e| e.to_string())?;
+        v.verify_password(&pw)?;
+        v.update(&id, account_from(data))?;
+        return ok(json!({}));
+    }
+    v.update(&id, account_from(data))?;
     ok(json!({}))
 }
 
@@ -217,8 +274,15 @@ fn import_text(state: State<AppState>, text: String) -> Result<Value, String> {
 }
 
 #[tauri::command]
-fn export_data(state: State<AppState>) -> Result<Value, String> {
+fn export_data(
+    window: WebviewWindow,
+    state: State<AppState>,
+    password: String,
+    biometric: bool,
+) -> Result<Value, String> {
+    let pw = resolve_password(&window, password, biometric, "验证身份以查看导出二维码")?;
     let mut v = state.vault.lock().map_err(|e| e.to_string())?;
+    v.verify_password(&pw)?;
     let accounts = v.accounts()?;
     let qrs: Vec<qr::QrAccount> = accounts.iter().map(to_qr).collect();
     let json_acc: Vec<Value> = qrs
@@ -254,8 +318,17 @@ fn export_data(state: State<AppState>) -> Result<Value, String> {
 }
 
 #[tauri::command]
-fn account_qr(state: State<AppState>, id: String) -> Result<Value, String> {
-    let acc = state.vault.lock().map_err(|e| e.to_string())?.get(&id)?;
+fn account_qr(
+    window: WebviewWindow,
+    state: State<AppState>,
+    id: String,
+    password: String,
+    biometric: bool,
+) -> Result<Value, String> {
+    let pw = resolve_password(&window, password, biometric, "验证身份以查看账号二维码")?;
+    let mut v = state.vault.lock().map_err(|e| e.to_string())?;
+    v.verify_password(&pw)?;
+    let acc = v.get(&id)?;
     let q = to_qr(&acc);
     let uri = qr::otpauth_uri(&q);
     ok(json!({ "uri": uri, "svg": qr::qr_svg(&uri)? }))
@@ -288,7 +361,26 @@ fn save_settings(state: State<AppState>, data: SettingsIn) -> Result<Value, Stri
 #[tauri::command]
 fn change_password(state: State<AppState>, old: String, new_password: String, confirm: String) -> Result<Value, String> {
     state.vault.lock().map_err(|e| e.to_string())?.change_password(&old, &new_password, &confirm)?;
+    if bio::enabled() {
+        bio::store(&new_password)?;
+    }
     ok(json!({}))
+}
+
+#[tauri::command]
+fn save_text(name: String, content: String) -> Result<Value, String> {
+    let file = Path::new(&name)
+        .file_name()
+        .ok_or_else(|| "文件名无效".to_string())?
+        .to_string_lossy();
+    if file.is_empty() {
+        return Err("文件名无效".into());
+    }
+    let dir = dirs::download_dir().ok_or_else(|| "找不到下载文件夹".to_string())?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = dir.join(file.as_ref());
+    std::fs::write(&path, content).map_err(|e| e.to_string())?;
+    ok(json!({ "path": path.to_string_lossy() }))
 }
 
 #[tauri::command]
@@ -316,6 +408,38 @@ fn webdav_download(state: State<AppState>, password: String) -> Result<Value, St
     ok(json!({}))
 }
 
+#[tauri::command]
+fn bio_status() -> Result<Value, String> {
+    ok(json!({
+        "available": bio::available(),
+        "enabled": bio::enabled()
+    }))
+}
+
+#[tauri::command]
+fn bio_enable(window: WebviewWindow, state: State<AppState>, password: String) -> Result<Value, String> {
+    {
+        let mut v = state.vault.lock().map_err(|e| e.to_string())?;
+        v.verify_password(&password)?;
+    }
+    bio::prompt(window_hwnd(&window), "开启指纹解锁")?;
+    bio::store(&password)?;
+    ok(json!({ "enabled": true }))
+}
+
+#[tauri::command]
+fn bio_disable() -> Result<Value, String> {
+    bio::clear()?;
+    ok(json!({ "enabled": false }))
+}
+
+#[tauri::command]
+fn unlock_bio(window: WebviewWindow, state: State<AppState>) -> Result<Value, String> {
+    let pw = bio_password(&window, "解锁验证器")?;
+    state.vault.lock().map_err(|e| e.to_string())?.unlock(&pw)?;
+    ok(json!({}))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -340,7 +464,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             status, setup, unlock, lock, snapshot, get_account, add_account, update_account,
             delete_account, import_uri, import_qr, import_text, export_data, account_qr,
-            save_settings, change_password, webdav_upload, webdav_download
+            save_settings, change_password, webdav_upload, webdav_download, save_text,
+            bio_status, bio_enable, bio_disable, unlock_bio
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

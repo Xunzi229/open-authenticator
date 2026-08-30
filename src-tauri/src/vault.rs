@@ -346,6 +346,25 @@ impl Vault {
         self.password.clone()
     }
 
+    pub fn verify_password(&mut self, password: &str) -> Result<(), String> {
+        if !self.unlocked() {
+            return Err("已锁定".into());
+        }
+        if password.is_empty() {
+            return Err("请输入主密码".into());
+        }
+        if self.fail > 0 {
+            let delay = (350u64 * 2u64.pow(self.fail.min(4))).min(4000);
+            thread::sleep(Duration::from_millis(delay));
+        }
+        if self.password.as_deref() != Some(password) {
+            self.fail += 1;
+            return Err("密码错误".into());
+        }
+        self.fail = 0;
+        Ok(())
+    }
+
     pub fn path(&self) -> &Path {
         &self.path
     }

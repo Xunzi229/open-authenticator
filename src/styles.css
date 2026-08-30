@@ -100,7 +100,9 @@ button { font: inherit; cursor: pointer; }
   background: var(--accent); color: #fff; font-weight: 600;
 }
 #gate-btn:hover, .primary:hover { background: var(--accent-press); }
+#btn-bio { width: 100%; margin-top: 8px; }
 .err { min-height: 18px; color: var(--danger); font-size: 12px; }
+.err.ok { color: var(--ok); }
 .hint { color: var(--muted); font-size: 12px; line-height: 1.5; margin: 0 0 14px; }
 .setup-only.hidden { display: none; }
 #app { display: flex; flex-direction: column; background: var(--bg); }
@@ -161,7 +163,7 @@ button { font: inherit; cursor: pointer; }
 .meta { min-width: 0; flex: 1; }
 .name { font-size: 15px; color: var(--soft); font-weight: 510; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .note { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.code-wrap { min-width: 108px; text-align: right; border-radius: 8px; padding: 4px 2px; }
+.code-wrap { min-width: 96px; text-align: right; border-radius: 8px; padding: 4px 2px; }
 .code-wrap:hover { background: rgba(255,255,255,.06); }
 .code {
   font-family: ui-monospace, "SF Mono", Consolas, monospace;
@@ -170,15 +172,21 @@ button { font: inherit; cursor: pointer; }
 }
 .row.shown .code { color: #fff; }
 .row.shown.danger .code { color: var(--danger); }
-.copy, .edit {
+.copy, .edit, .del {
   border: 0; width: 28px; height: 28px; border-radius: 8px;
   background: transparent; color: #636366; display: grid; place-items: center;
+  flex-shrink: 0;
 }
 .copy:hover, .edit:hover { background: rgba(255,255,255,.08); color: #e4e4e7; }
+.del:hover { background: rgba(255, 69, 58, .16); color: var(--danger); }
 .empty {
   text-align: center; color: var(--muted); padding: 64px 16px 24px; font-size: 14px;
 }
 .empty strong { display: block; color: var(--text); font-size: 16px; margin-bottom: 6px; }
+.modal, .sheet, button, input, textarea, select {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
 .modal {
   position: fixed; inset: 36px 0 0;
   background: rgba(0,0,0,.46);
@@ -239,11 +247,12 @@ button { font: inherit; cursor: pointer; }
 .qr-box {
   background: #fff; border-radius: 16px; padding: 14px;
   display: grid; place-items: center; margin: 0 auto 10px;
-  width: 248px;
+  width: 248px; overflow: hidden; position: relative;
 }
-.qr-box svg { width: 220px; height: 220px; display: block; }
+.qr-box svg { width: 220px; height: 220px; display: block; pointer-events: none; }
 .qr-cap { text-align: center; color: var(--muted); font-size: 12px; margin-bottom: 10px; }
 .pane { display: none; }
 .pane.on { display: block; }
-.mini-qr { background: #fff; border-radius: 12px; padding: 10px; width: 168px; margin: 8px auto 0; }
-.mini-qr svg { width: 148px; height: 148px; display: block; }
+.mini-qr { background: #fff; border-radius: 12px; padding: 10px; width: 168px; margin: 8px auto 0; overflow: hidden; }
+.mini-qr svg { width: 148px; height: 148px; display: block; pointer-events: none; }
+.pane .row-btns { position: relative; z-index: 1; }

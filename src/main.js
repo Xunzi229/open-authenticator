@@ -2,8 +2,10 @@ const RING = 2 * Math.PI * 15.5
 const COPY = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5h10"/></svg>'
 const OK = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12l5 5L20 7"/></svg>'
 const EDIT = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>'
+const DEL = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16"/><path d="M9 7V5h6v2"/><path d="M7 7l1 13h8l1-13"/></svg>'
 
 let state = { accounts: [], codes: {}, remain: 30, settings: {}, shown: new Set(), q: '', export: null, qrPage: 0 }
+let bio = { available: false, enabled: false }
 let timer = null
 let clipTimer = null
 let isSetup = false
@@ -80,6 +82,7 @@ function paintList() {
           <div class="code-wrap" data-act="toggle"><div class="code">${code}</div></div>
           <button class="copy" type="button" data-act="copy">${COPY}</button>
           <button class="edit" type="button" data-act="edit">${EDIT}</button>
+          <button class="del" type="button" data-act="del">${DEL}</button>
         </div>`
       }).join('')}
       </div>
@@ -120,6 +123,7 @@ async function copyCode(id, btn) {
 function closeModal() {
   $('modal').classList.add('hidden')
   $('sheet').innerHTML = ''
+  state.export = null
   if (window._pasteQr) {
     document.removeEventListener('paste', window._pasteQr)
     window._pasteQr = null
@@ -140,6 +144,28 @@ function download(name, text, type) {
   setTimeout(() => URL.revokeObjectURL(a.href), 1000)
 }
 
+async function saveExport(name, content) {
+  const el = $('export-err')
+  el.classList.remove('ok')
+  if (!content) {
+    el.textContent = '请先验证主密码'
+    return
+  }
+  try {
+    if (!window.__TAURI__) {
+      download(name, content, name.endsWith('.json') ? 'application/json' : 'text/plain')
+      el.classList.add('ok')
+      el.textContent = '已开始下载 ' + name
+      return
+    }
+    const res = await call('save_text', { name, content })
+    el.classList.add('ok')
+    el.textContent = '已保存到 ' + res.path
+  } catch (e) {
+    el.textContent = e.message
+  }
+}
+
 function openEditor(acc) {
   const a = acc || { issuer: '', name: '', email: '', notes: '', secret: '', algorithm: 'SHA1', digits: 6 }
   openModal(`
@@ -149,42 +175,79 @@ function openEditor(acc) {
     ${field('email', '邮箱', a.email)}
     <label>备注<textarea name="notes">${esc(a.notes)}</textarea></label>
     ${field('secret', acc ? '密钥（留空则不改）' : '密钥', acc ? '' : a.secret, 'spellcheck="false" autocomplete="off"')}
+    ${acc ? field('reauth', '验证主密码（改密钥或看二维码时必填）', '', 'type="password" autocomplete="current-password"') : ''}
     <label>算法<select name="algorithm">
       <option ${a.algorithm === 'SHA1' ? 'selected' : ''}>SHA1</option>
       <option ${a.algorithm === 'SHA256' ? 'selected' : ''}>SHA256</option>
       <option ${a.algorithm === 'SHA512' ? 'selected' : ''}>SHA512</option>
     </select></label>
     ${field('digits', '位数', a.digits, 'type="number" min="6" max="8"')}
-    ${acc ? '<div id="acc-qr"></div>' : ''}
+    ${acc ? '<div id="acc-qr"><button type="button" class="ghost" id="btn-show-qr">验证后显示二维码</button>' + (bio.enabled ? '<button type="button" class="ghost" id="btn-show-qr-bio" style="margin-top:8px">使用指纹显示二维码</button>' : '') + '</div>' : ''}
     <p class="err" id="form-err"></p>
     <div class="row-btns">
       <button type="button" class="ghost" data-close>取消</button>
-      ${acc ? '<button type="button" class="danger-btn" id="btn-del">删除</button>' : ''}
       <button type="button" class="primary" id="btn-save">保存</button>
-    </div>`)
+    </div>
+    ${acc ? '<div class="row-btns"><button type="button" class="danger-btn" id="btn-del">删除账号</button></div>' : ''}
+  `)
   $('sheet').querySelector('[data-close]').onclick = closeModal
   $('btn-save').onclick = async () => {
     const data = Object.fromEntries([...$('sheet').querySelectorAll('input,textarea,select')].map((n) => [n.name, n.name === 'digits' ? Number(n.value) : n.value]))
+    const password = data.reauth || ''
+    delete data.reauth
     try {
-      if (acc) await call('update_account', { id: acc.id, data })
-      else await call('add_account', { data })
+      if (acc) {
+        if (String(data.secret || '').trim() && !password) {
+          if (bio.enabled) {
+            await call('update_account', { id: acc.id, data, password: '', biometric: true })
+          } else {
+            throw new Error('更改密钥请先填写主密码')
+          }
+        } else {
+          await call('update_account', { id: acc.id, data, password, biometric: false })
+        }
+      } else {
+        await call('add_account', { data })
+      }
       closeModal()
       await refresh()
     } catch (e) { $('form-err').textContent = e.message }
   }
   const del = $('btn-del')
-  if (del) del.onclick = async () => {
-    if (!confirm('删除这个账号？')) return
-    await call('delete_account', { id: acc.id })
-    closeModal()
-    await refresh()
-  }
-  if (acc) {
-    call('account_qr', { id: acc.id }).then((res) => {
-      const box = $('acc-qr')
-      if (!box) return
+  if (del) del.onclick = () => askDelete(acc)
+  const showQr = $('btn-show-qr')
+  const showQrBio = $('btn-show-qr-bio')
+  const loadQr = async (biometric) => {
+    const pw = biometric ? '' : ($('sheet').querySelector('[name="reauth"]')?.value || '')
+    const box = $('acc-qr')
+    try {
+      const res = await call('account_qr', { id: acc.id, password: pw, biometric })
       box.innerHTML = `<p class="hint">导出二维码，可供其他验证器扫描</p><div class="mini-qr">${res.svg}</div>`
-    }).catch(() => {})
+    } catch (e) { $('form-err').textContent = e.message }
+  }
+  if (showQr) showQr.onclick = () => loadQr(false)
+  if (showQrBio) showQrBio.onclick = () => loadQr(true)
+}
+
+function askDelete(acc) {
+  const name = acc.name || acc.issuer || '这个账号'
+  openModal(`
+    <h2>删除账号</h2>
+    <p class="hint">确定删除「${esc(name)}」？删除后无法恢复。</p>
+    <p class="err" id="form-err"></p>
+    <div class="row-btns">
+      <button type="button" class="ghost" data-close>取消</button>
+      <button type="button" class="danger-btn" id="btn-del-ok">删除</button>
+    </div>
+  `)
+  $('sheet').querySelector('[data-close]').onclick = closeModal
+  $('btn-del-ok').onclick = async () => {
+    try {
+      await call('delete_account', { id: acc.id })
+      state.shown.delete(acc.id)
+      closeModal()
+      await refresh()
+    } catch (e) { $('form-err').textContent = e.message }
   }
 }
 
@@ -225,6 +288,34 @@ function paintExport() {
   if (next) next.onclick = () => { state.qrPage = (state.qrPage + 1) % n; paintExport() }
 }
 
+function showExportGate() {
+  state.export = null
+  const box = $('export-qr')
+  const err = $('export-err')
+  if (err) {
+    err.classList.remove('ok')
+    err.textContent = ''
+  }
+  if (!box) return
+  box.innerHTML = `
+    <p class="hint">查看导出二维码或下载备份，需要再次验证身份。</p>
+    ${field('export-pw', '主密码', '', 'type="password" autocomplete="current-password"')}
+    ${bio.enabled ? '<div class="row-btns tight"><button type="button" class="ghost" id="btn-export-bio">使用指纹验证</button></div>' : ''}
+    <div class="row-btns tight"><button type="button" class="primary" id="btn-export-auth">验证并显示</button></div>`
+  const runExport = async (biometric) => {
+    const pw = biometric ? '' : ($('sheet').querySelector('[name="export-pw"]')?.value || '')
+    err.classList.remove('ok')
+    try {
+      state.export = await call('export_data', { password: pw, biometric })
+      state.qrPage = 0
+      paintExport()
+    } catch (e) { err.textContent = e.message }
+  }
+  $('btn-export-auth').onclick = () => runExport(false)
+  const expBio = $('btn-export-bio')
+  if (expBio) expBio.onclick = () => runExport(true)
+}
+
 function showPane(name) {
   $('pane-in').classList.toggle('on', name === 'in')
   $('pane-out').classList.toggle('on', name === 'out')
@@ -251,7 +342,7 @@ function openTransfer() {
       </div>
     </div>
     <div class="pane" id="pane-out">
-      <div id="export-qr"><p class="hint">正在生成二维码…</p></div>
+      <div id="export-qr"></div>
       <p class="err" id="export-err"></p>
       <div class="row-btns">
         <button type="button" class="ghost" id="btn-json">下载 JSON</button>
@@ -260,17 +351,13 @@ function openTransfer() {
       <div class="row-btns"><button type="button" class="ghost" data-close>完成</button></div>
     </div>`)
   $('sheet').querySelectorAll('[data-close]').forEach((b) => { b.onclick = closeModal })
-  $('tab-in').onclick = () => showPane('in')
-  $('tab-out').onclick = async () => {
+  $('tab-in').onclick = () => {
+    state.export = null
+    showPane('in')
+  }
+  $('tab-out').onclick = () => {
     showPane('out')
-    try {
-      state.export = await call('export_data')
-      state.qrPage = 0
-      paintExport()
-    } catch (e) {
-      $('export-qr').innerHTML = ''
-      $('export-err').textContent = e.message
-    }
+    showExportGate()
   }
   const drop = $('drop')
   const file = $('file')
@@ -295,14 +382,8 @@ function openTransfer() {
       alert('已导入 ' + res.count + ' 个账号')
     } catch (e) { $('form-err').textContent = e.message }
   }
-  $('btn-json').onclick = () => {
-    if (!state.export?.json) { $('export-err').textContent = '请先打开「导出」'; return }
-    download('authenticator.json', state.export.json, 'application/json')
-  }
-  $('btn-txt').onclick = () => {
-    if (!state.export?.txt) { $('export-err').textContent = '请先打开「导出」'; return }
-    download('authenticator-otpauth.txt', state.export.txt, 'text/plain')
-  }
+  $('btn-json').onclick = () => saveExport('authenticator.json', state.export?.json)
+  $('btn-txt').onclick = () => saveExport('authenticator-otpauth.txt', state.export?.txt)
 }
 
 function readImportFile(file) {
@@ -333,6 +414,13 @@ function readImportFile(file) {
 
 function openSettings() {
   const s = state.settings || {}
+  call('bio_status').then((b) => {
+    bio.available = !!b.available
+    bio.enabled = !!b.enabled
+  }).catch(() => {}).finally(() => renderSettings(s))
+}
+
+function renderSettings(s) {
   openModal(`
     <h2>设置</h2>
     <p class="sec-title">常规</p>
@@ -342,6 +430,15 @@ function openSettings() {
         ${field('clipboard_clear_seconds', '清空剪贴板（秒）', s.clipboard_clear_seconds, 'type="number" min="0"')}
       </div>
       <p class="hint">填 0 表示关闭该项。</p>
+    </section>
+    <p class="sec-title">系统解锁</p>
+    <section class="block">
+      ${bio.available ? `
+        <p class="hint">${bio.enabled ? '已开启。锁定后可用指纹 / Windows Hello 解锁，查看二维码和更改密钥也可指纹验证。' : '开启后可用 Windows Hello 或指纹解锁，以及二次验证。'}</p>
+        ${bio.enabled
+          ? '<div class="row-btns tight"><button type="button" class="ghost" id="btn-bio-off">关闭指纹解锁</button></div>'
+          : `${field('bio-pw', '主密码', '', 'type="password" autocomplete="current-password"')}<div class="row-btns tight"><button type="button" id="btn-bio-on">开启指纹解锁</button></div>`}
+      ` : '<p class="hint">当前设备没有可用的指纹或 Windows Hello。</p>'}
     </section>
     <p class="sec-title">WebDAV 同步</p>
     <section class="block">
@@ -396,6 +493,26 @@ function openSettings() {
     try { await call('change_password', { old: val('old'), newPassword: val('newpw'), confirm: val('new2') }); $('form-err').textContent = '主密码已更新' }
     catch (e) { $('form-err').textContent = e.message }
   }
+  const bioOn = $('btn-bio-on')
+  if (bioOn) bioOn.onclick = async () => {
+    $('form-err').classList.remove('ok')
+    try {
+      await call('bio_enable', { password: val('bio-pw') })
+      bio.enabled = true
+      $('form-err').classList.add('ok')
+      $('form-err').textContent = '已开启指纹解锁'
+    } catch (e) { $('form-err').textContent = e.message }
+  }
+  const bioOff = $('btn-bio-off')
+  if (bioOff) bioOff.onclick = async () => {
+    $('form-err').classList.remove('ok')
+    try {
+      await call('bio_disable')
+      bio.enabled = false
+      $('form-err').classList.add('ok')
+      $('form-err').textContent = '已关闭指纹解锁'
+    } catch (e) { $('form-err').textContent = e.message }
+  }
 }
 
 async function showApp() {
@@ -418,12 +535,24 @@ async function showGate() {
   closeModal()
   const st = await call('status')
   isSetup = !st.exists
-  $('gate-sub').textContent = isSetup ? '首次使用，请设置主密码（至少 8 位）' : '输入主密码解锁'
+  bio.available = !!st.bio_available
+  bio.enabled = !!st.bio_enabled
+  $('gate-sub').textContent = isSetup ? '首次使用，请设置主密码（至少 8 位）' : (bio.enabled ? '指纹或主密码解锁' : '输入主密码解锁')
   $('gate-btn').textContent = isSetup ? '创建保险库' : '解锁'
   document.querySelector('.setup-only').classList.toggle('hidden', !isSetup)
+  $('btn-bio').classList.toggle('hidden', isSetup || !bio.enabled)
   $('pw1').value = ''
   $('pw2').value = ''
   $('gate-err').textContent = ''
+  if (!isSetup && bio.enabled) tryBioUnlock()
+}
+
+async function tryBioUnlock() {
+  $('gate-err').textContent = ''
+  try {
+    await call('unlock_bio')
+    await showApp()
+  } catch (e) { $('gate-err').textContent = e.message }
 }
 
 $('gate-form').addEventListener('submit', async (e) => {
@@ -437,6 +566,7 @@ $('gate-form').addEventListener('submit', async (e) => {
 })
 
 $('btn-lock').onclick = async () => { await call('lock'); await showGate() }
+$('btn-bio').onclick = () => tryBioUnlock()
 $('btn-add').onclick = () => openEditor(null)
 $('btn-io').onclick = openTransfer
 $('btn-set').onclick = openSettings
@@ -462,6 +592,11 @@ $('list').addEventListener('click', async (e) => {
   if (act === 'edit') {
     const res = await call('get_account', { id })
     openEditor(res.account)
+    return
+  }
+  if (act === 'del') {
+    const acc = state.accounts.find((a) => a.id === id) || { id, name: row.querySelector('.name')?.textContent || '' }
+    askDelete(acc)
     return
   }
   copyCode(id, e.target.closest('.copy') || row.querySelector('.copy'))
