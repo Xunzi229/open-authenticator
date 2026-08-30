@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Authenticator",
-  "version": "1.0.0-pre.15",
+  "version": "1.0.0-16",
   "identifier": "app.local.authenticator",
   "build": {
     "beforeDevCommand": "npm run dev",

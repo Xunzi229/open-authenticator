@@ -1,11 +1,12 @@
 {
   "name": "authenticator",
   "private": true,
-  "version": "1.0.0-pre.15",
+  "version": "1.0.0-16",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "check:version": "node scripts/check-version.mjs",
     "tauri": "tauri"
   },
   "devDependencies": {

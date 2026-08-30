@@ -1,6 +1,6 @@
 [package]
 name = "authenticator"
-version = "1.0.0-pre.15"
+version = "1.0.0-16"
 description = "Encrypted cross-platform TOTP authenticator"
 authors = ["local"]
 edition = "2021"
