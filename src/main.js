@@ -514,6 +514,7 @@ function renderSettings(s) {
         <button type="button" class="ghost" id="btn-down">拉取</button>
         <button type="button" class="ghost" id="btn-up">上传</button>
       </div>
+      <p class="err" id="dav-err"></p>
     </section>
     <p class="sec-title">主密码</p>
     <section class="block">
@@ -529,28 +530,48 @@ function renderSettings(s) {
     </div>`)
   $('sheet').querySelector('[data-close]').onclick = closeModal
   const val = (name) => $('sheet').querySelector('[name="' + name + '"]').value
+  const saveSet = () => call('save_settings', { data: {
+    webdav_url: val('webdav_url'),
+    webdav_user: val('webdav_user'),
+    webdav_password: val('webdav_password'),
+    webdav_path: val('webdav_path'),
+    autolock_seconds: Number(val('autolock_seconds') || 0),
+    clipboard_clear_seconds: Number(val('clipboard_clear_seconds') || 0),
+  }})
+  const davMsg = (text, kind) => {
+    const el = $('dav-err')
+    el.className = kind === 'ok' ? 'err ok' : kind === 'busy' ? 'hint' : 'err'
+    el.textContent = text
+  }
   $('btn-save-set').onclick = async () => {
     try {
-      await call('save_settings', { data: {
-        webdav_url: val('webdav_url'),
-        webdav_user: val('webdav_user'),
-        webdav_password: val('webdav_password'),
-        webdav_path: val('webdav_path'),
-        autolock_seconds: Number(val('autolock_seconds') || 0),
-        clipboard_clear_seconds: Number(val('clipboard_clear_seconds') || 0),
-      }})
+      await saveSet()
       await refresh()
+      $('form-err').classList.add('ok')
       $('form-err').textContent = '设置已保存'
-    } catch (e) { $('form-err').textContent = e.message }
+    } catch (e) {
+      $('form-err').classList.remove('ok')
+      $('form-err').textContent = e.message
+    }
   }
-  $('btn-up').onclick = async () => {
-    try { await call('webdav_upload'); $('form-err').textContent = '已上传加密保险库' }
-    catch (e) { $('form-err').textContent = e.message }
+  const runDav = async (btn, doing, work, done) => {
+    davMsg(doing, 'busy')
+    btn.disabled = true
+    try {
+      await saveSet()
+      await work()
+      davMsg(done, 'ok')
+    } catch (e) {
+      davMsg(String(e.message || e).replace(/^Error:\s*/, ''), 'err')
+    } finally {
+      btn.disabled = false
+    }
   }
-  $('btn-down').onclick = async () => {
-    try { await call('webdav_download', { password: '' }); await refresh(); $('form-err').textContent = '已从远程覆盖本地' }
-    catch (e) { $('form-err').textContent = e.message }
-  }
+  $('btn-up').onclick = () => runDav($('btn-up'), '正在上传…', () => call('webdav_upload'), '已上传加密保险库')
+  $('btn-down').onclick = () => runDav($('btn-down'), '正在拉取…', async () => {
+    await call('webdav_download', { password: '' })
+    await refresh()
+  }, '已从远程覆盖本地')
   $('btn-pw').onclick = async () => {
     try { await call('change_password', { old: val('old'), newPassword: val('newpw'), confirm: val('new2') }); $('form-err').textContent = '主密码已更新' }
     catch (e) { $('form-err').textContent = e.message }

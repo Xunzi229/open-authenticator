@@ -384,26 +384,36 @@ fn save_text(name: String, content: String) -> Result<Value, String> {
 }
 
 #[tauri::command]
-fn webdav_upload(state: State<AppState>) -> Result<Value, String> {
-    let mut v = state.vault.lock().map_err(|e| e.to_string())?;
-    let s = v.settings()?;
-    let blob = v.encrypted_bytes()?;
-    drop(v);
-    webdav::put(&s.webdav_url, &s.webdav_path, &s.webdav_user, &s.webdav_password, &blob)?;
+async fn webdav_upload(state: State<'_, AppState>) -> Result<Value, String> {
+    let (s, blob) = {
+        let mut v = state.vault.lock().map_err(|e| e.to_string())?;
+        (v.settings()?, v.encrypted_bytes()?)
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        webdav::put(&s.webdav_url, &s.webdav_path, &s.webdav_user, &s.webdav_password, &blob)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
     ok(json!({}))
 }
 
 #[tauri::command]
-fn webdav_download(state: State<AppState>, password: String) -> Result<Value, String> {
-    let mut v = state.vault.lock().map_err(|e| e.to_string())?;
-    let s = v.settings()?;
-    let pw = if password.is_empty() {
-        v.password().ok_or_else(|| "请先解锁".to_string())?
-    } else {
-        password
+async fn webdav_download(state: State<'_, AppState>, password: String) -> Result<Value, String> {
+    let (s, pw) = {
+        let mut v = state.vault.lock().map_err(|e| e.to_string())?;
+        let s = v.settings()?;
+        let pw = if password.is_empty() {
+            v.password().ok_or_else(|| "请先解锁".to_string())?
+        } else {
+            password
+        };
+        (s, pw)
     };
-    drop(v);
-    let blob = webdav::get(&s.webdav_url, &s.webdav_path, &s.webdav_user, &s.webdav_password)?;
+    let blob = tauri::async_runtime::spawn_blocking(move || {
+        webdav::get(&s.webdav_url, &s.webdav_path, &s.webdav_user, &s.webdav_password)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
     state.vault.lock().map_err(|e| e.to_string())?.replace_bytes(&blob, &pw)?;
     ok(json!({}))
 }
