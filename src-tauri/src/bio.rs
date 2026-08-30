@@ -1,3 +1,5 @@
+use zeroize::Zeroize;
+
 const SERVICE: &str = "app.local.authenticator";
 const USER: &str = "master";
 
@@ -6,7 +8,13 @@ fn entry() -> Result<keyring::Entry, String> {
 }
 
 pub fn enabled() -> bool {
-    entry().ok().and_then(|e| e.get_password().ok()).is_some()
+    match stored_password() {
+        Ok(Some(mut password)) => {
+            password.zeroize();
+            true
+        }
+        _ => false,
+    }
 }
 
 pub fn store(password: &str) -> Result<(), String> {
@@ -17,11 +25,19 @@ pub fn take() -> Result<String, String> {
     entry()?.get_password().map_err(|_| "未开启指纹解锁".into())
 }
 
-pub fn clear() -> Result<(), String> {
-    if let Ok(e) = entry() {
-        let _ = e.delete_credential();
+pub fn stored_password() -> Result<Option<String>, String> {
+    match entry()?.get_password() {
+        Ok(password) => Ok(Some(password)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(error) => Err(error.to_string()),
     }
-    Ok(())
+}
+
+pub fn clear() -> Result<(), String> {
+    match entry()?.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(error) => Err(error.to_string()),
+    }
 }
 
 pub fn available() -> bool {
@@ -106,11 +122,11 @@ fn verify_for_window(
     let interop: IUserConsentVerifierInterop =
         factory::<UserConsentVerifier, IUserConsentVerifierInterop>()?;
     let mut target = HWND(hwnd as *mut core::ffi::c_void);
-    let fg = unsafe { GetForegroundWindow() };
-    if !fg.0.is_null() {
-        target = fg;
+    if target.0.is_null() {
+        target = unsafe { GetForegroundWindow() };
     }
     let op: IAsyncOperation<UserConsentVerificationResult> =
         unsafe { interop.RequestVerificationForWindowAsync(target, msg)? };
     op.get()
 }
+use zeroize::Zeroize;

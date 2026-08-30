@@ -3,6 +3,7 @@ use hmac::{Hmac, Mac};
 use sha1::Sha1;
 use sha2::{Sha256, Sha512};
 use std::time::{SystemTime, UNIX_EPOCH};
+use zeroize::Zeroize;
 
 fn now_secs() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
@@ -74,19 +75,21 @@ fn totp_at(
     let counter = timestamp / period;
     let mut msg = [0u8; 8];
     msg.copy_from_slice(&counter.to_be_bytes());
-    let key = BASE32_NOPAD
+    let mut key = BASE32_NOPAD
         .decode(secret.as_bytes())
         .map_err(|_| "密钥不是有效的 Base32".to_string())?;
-    let hash = match algo.as_str() {
+    let mut hash = match algo.as_str() {
         "SHA256" => hmac_sha256(&key, &msg),
         "SHA512" => hmac_sha512(&key, &msg),
         _ => hmac_sha1(&key, &msg),
     };
+    key.zeroize();
     let offset = (hash[hash.len() - 1] & 0x0f) as usize;
     let bin = ((hash[offset] as u32 & 0x7f) << 24)
         | ((hash[offset + 1] as u32) << 16)
         | ((hash[offset + 2] as u32) << 8)
         | (hash[offset + 3] as u32);
+    hash.zeroize();
     let modn = 10u32.pow(digits);
     Ok(format!("{:0width$}", bin % modn, width = digits as usize))
 }

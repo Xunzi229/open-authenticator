@@ -2,8 +2,12 @@ use base64::Engine;
 use data_encoding::BASE32_NOPAD;
 use image::imageops::{self, FilterType};
 use image::GrayImage;
+use rand::RngCore;
 use serde::Serialize;
+use std::io::Cursor;
 use url::Url;
+
+const MAX_MIGRATION_BYTES: usize = 1024 * 1024;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct QrAccount {
@@ -55,14 +59,11 @@ fn parse_otpauth(uri: &str) -> Result<Vec<QrAccount>, String> {
         }
         name = name[i + 1..].to_string();
     }
-    let mut algo = u
+    let algo = u
         .query_pairs()
         .find(|(k, _)| k == "algorithm")
         .map(|(_, v)| v.to_ascii_uppercase().replace('-', ""))
         .unwrap_or_else(|| "SHA1".into());
-    if algo != "SHA1" && algo != "SHA256" && algo != "SHA512" {
-        algo = "SHA1".into();
-    }
     let digits = u
         .query_pairs()
         .find(|(k, _)| k == "digits")
@@ -73,6 +74,8 @@ fn parse_otpauth(uri: &str) -> Result<Vec<QrAccount>, String> {
         .find(|(k, _)| k == "period")
         .and_then(|(_, v)| v.parse().ok())
         .unwrap_or(30);
+    let secret = crate::totp::normalize_secret(&secret)?;
+    let algo = crate::totp::validate_parameters(digits, &algo, period)?;
     Ok(vec![QrAccount {
         issuer,
         name,
@@ -90,51 +93,61 @@ fn parse_migration(uri: &str) -> Result<Vec<QrAccount>, String> {
         .find(|(k, _)| k == "data")
         .map(|(_, v)| v.replace(' ', "+"))
         .unwrap_or_default();
+    if raw.len() > (MAX_MIGRATION_BYTES * 4 / 3) + 8 {
+        return Err("migration 数据过大".into());
+    }
     let pad = (4 - raw.len() % 4) % 4;
     raw.push_str(&"=".repeat(pad));
     let decoded = base64::engine::general_purpose::STANDARD
         .decode(&raw)
         .or_else(|_| base64::engine::general_purpose::URL_SAFE.decode(&raw))
         .map_err(|_| "migration 数据无法解码")?;
+    if decoded.len() > MAX_MIGRATION_BYTES {
+        return Err("migration 数据过大".into());
+    }
     let mut accounts = Vec::new();
     let mut pos = 0usize;
+    let mut batch_size = 1usize;
+    let mut batch_index = 0usize;
+    let mut batch_id = None;
     while pos < decoded.len() {
-        let Some((tag, p)) = read_varint(&decoded, pos) else {
-            break;
-        };
+        let (tag, p) = read_varint(&decoded, pos)?;
         pos = p;
         let field = tag >> 3;
         let wire = tag & 7;
         if wire == 0 {
-            let Some((_, p)) = read_varint(&decoded, pos) else {
-                break;
-            };
+            let (value, p) = read_varint(&decoded, pos)?;
             pos = p;
-        } else if wire == 2 {
-            let Some((len, p)) = read_varint(&decoded, pos) else {
-                break;
-            };
-            pos = p;
-            if pos + len > decoded.len() {
-                break;
+            match field {
+                3 => batch_size = value,
+                4 => batch_index = value,
+                5 => batch_id = Some(value),
+                _ => {}
             }
-            let value = &decoded[pos..pos + len];
-            pos += len;
+        } else if wire == 2 {
+            let (len, p) = read_varint(&decoded, pos)?;
+            pos = p;
+            let end = pos.checked_add(len).filter(|end| *end <= decoded.len()).ok_or("migration 数据损坏")?;
+            let value = &decoded[pos..end];
+            pos = end;
             if field == 1 {
                 if let Some(a) = parse_otp(value)? {
                     accounts.push(a);
                 }
             }
         } else if wire == 1 {
-            pos += 8;
+            pos = pos.checked_add(8).filter(|end| *end <= decoded.len()).ok_or("migration 数据损坏")?;
         } else if wire == 5 {
-            pos += 4;
+            pos = pos.checked_add(4).filter(|end| *end <= decoded.len()).ok_or("migration 数据损坏")?;
         } else {
-            break;
+            return Err("migration 数据包含不支持的字段".into());
         }
     }
     if accounts.is_empty() {
         return Err("二维码里没有账号".into());
+    }
+    if batch_size == 0 || batch_index >= batch_size || (batch_size > 1 && batch_id.is_none()) {
+        return Err("migration 批次信息无效".into());
     }
     Ok(accounts)
 }
@@ -148,16 +161,12 @@ fn parse_otp(data: &[u8]) -> Result<Option<QrAccount>, String> {
     let mut digits = 1u32;
     let mut otp_type = 0u32;
     while pos < data.len() {
-        let Some((tag, p)) = read_varint(data, pos) else {
-            break;
-        };
+        let (tag, p) = read_varint(data, pos)?;
         pos = p;
         let field = tag >> 3;
         let wire = tag & 7;
         if wire == 0 {
-            let Some((v, p)) = read_varint(data, pos) else {
-                break;
-            };
+            let (v, p) = read_varint(data, pos)?;
             pos = p;
             if field == 4 {
                 algorithm = v as u32;
@@ -169,15 +178,11 @@ fn parse_otp(data: &[u8]) -> Result<Option<QrAccount>, String> {
                 otp_type = v as u32;
             }
         } else if wire == 2 {
-            let Some((len, p)) = read_varint(data, pos) else {
-                break;
-            };
+            let (len, p) = read_varint(data, pos)?;
             pos = p;
-            if pos + len > data.len() {
-                break;
-            }
-            let value = &data[pos..pos + len];
-            pos += len;
+            let end = pos.checked_add(len).filter(|end| *end <= data.len()).ok_or("migration 账号数据损坏")?;
+            let value = &data[pos..end];
+            pos = end;
             match field {
                 1 => secret = value.to_vec(),
                 2 => name = String::from_utf8_lossy(value).into_owned(),
@@ -185,11 +190,11 @@ fn parse_otp(data: &[u8]) -> Result<Option<QrAccount>, String> {
                 _ => {}
             }
         } else if wire == 1 {
-            pos += 8;
+            pos = pos.checked_add(8).filter(|end| *end <= data.len()).ok_or("migration 账号数据损坏")?;
         } else if wire == 5 {
-            pos += 4;
+            pos = pos.checked_add(4).filter(|end| *end <= data.len()).ok_or("migration 账号数据损坏")?;
         } else {
-            break;
+            return Err("migration 账号包含不支持的字段".into());
         }
     }
     if secret.is_empty() {
@@ -203,11 +208,16 @@ fn parse_otp(data: &[u8]) -> Result<Option<QrAccount>, String> {
     }
     // Google proto: 1=SHA1 2=SHA256 3=SHA512；DigitCount 1=6 2=8，也兼容直接写 6/8
     let algo = match algorithm {
+        1 => "SHA1",
         2 => "SHA256",
         3 => "SHA512",
-        _ => "SHA1",
+        _ => return Err("迁移数据包含未知的算法".into()),
     };
-    let d = if digits == 2 || digits == 8 { 8 } else { 6 };
+    let d = match digits {
+        1 | 6 => 6,
+        2 | 8 => 8,
+        _ => return Err("迁移数据包含未知的验证码位数".into()),
+    };
     Ok(Some(QrAccount {
         issuer,
         name,
@@ -218,22 +228,25 @@ fn parse_otp(data: &[u8]) -> Result<Option<QrAccount>, String> {
     }))
 }
 
-fn read_varint(data: &[u8], mut pos: usize) -> Option<(usize, usize)> {
+fn read_varint(data: &[u8], mut pos: usize) -> Result<(usize, usize), String> {
     let mut result = 0usize;
     let mut shift = 0;
     while pos < data.len() {
         let b = data[pos];
         pos += 1;
-        result |= ((b & 0x7f) as usize) << shift;
+        let part = ((b & 0x7f) as usize)
+            .checked_shl(shift)
+            .ok_or_else(|| "migration varint 溢出".to_string())?;
+        result |= part;
         if b & 0x80 == 0 {
-            return Some((result, pos));
+            return Ok((result, pos));
         }
         shift += 7;
         if shift > 63 {
-            return None;
+            return Err("migration varint 溢出".into());
         }
     }
-    None
+    Err("migration varint 截断".into())
 }
 
 fn accounts_from_luma(img: GrayImage) -> Result<Vec<QrAccount>, String> {
@@ -283,7 +296,18 @@ fn variants(src: &GrayImage) -> Vec<GrayImage> {
 }
 
 pub fn decode_image(bytes: &[u8]) -> Result<Vec<QrAccount>, String> {
-    let img = image::load_from_memory(bytes).map_err(|_| "无法读取图片")?;
+    if bytes.len() > 10 * 1024 * 1024 {
+        return Err("二维码图片不能超过 10 MiB".into());
+    }
+    let mut reader = image::ImageReader::new(Cursor::new(bytes))
+        .with_guessed_format()
+        .map_err(|_| "无法读取图片")?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(8192);
+    limits.max_image_height = Some(8192);
+    limits.max_alloc = Some(128 * 1024 * 1024);
+    reader.limits(limits);
+    let img = reader.decode().map_err(|_| "无法读取图片")?;
     let luma = img.to_luma8();
     let mut last = "图里没有识别到二维码".to_string();
     for v in variants(&luma) {
@@ -390,7 +414,12 @@ fn encode_otp_msg(a: &QrAccount) -> Result<Vec<u8>, String> {
     Ok(m)
 }
 
-pub fn migration_uri(accounts: &[QrAccount], batch_index: usize, batch_size: usize) -> Result<String, String> {
+fn migration_uri(
+    accounts: &[QrAccount],
+    batch_index: usize,
+    batch_size: usize,
+    batch_id: u64,
+) -> Result<String, String> {
     let mut payload = Vec::new();
     for a in accounts {
         write_len(&mut payload, 1, &encode_otp_msg(a)?);
@@ -398,7 +427,7 @@ pub fn migration_uri(accounts: &[QrAccount], batch_index: usize, batch_size: usi
     write_var(&mut payload, 2, 1);
     write_var(&mut payload, 3, batch_size as u64);
     write_var(&mut payload, 4, batch_index as u64);
-    write_var(&mut payload, 5, 1);
+    write_var(&mut payload, 5, batch_id);
     let b64 = base64::engine::general_purpose::STANDARD.encode(&payload);
     Ok(format!(
         "otpauth-migration://offline?data={}",
@@ -422,6 +451,10 @@ pub fn migration_qrs(accounts: &[QrAccount]) -> Result<Vec<(String, usize)>, Str
     if accounts.is_empty() {
         return Err("没有可导出的账号".into());
     }
+    if accounts.iter().any(|account| account.period != 30) {
+        return Err("Google 转移二维码仅支持 30 秒周期账号".into());
+    }
+    let batch_id = rand::thread_rng().next_u64();
     let mut size = 10usize.min(accounts.len());
     loop {
         let mut out = Vec::new();
@@ -429,7 +462,7 @@ pub fn migration_qrs(accounts: &[QrAccount]) -> Result<Vec<(String, usize)>, Str
         let total = chunks.len();
         let mut ok = true;
         for (i, chunk) in chunks.iter().enumerate() {
-            let uri = migration_uri(chunk, i, total)?;
+            let uri = migration_uri(chunk, i, total, batch_id)?;
             match qr_svg(&uri) {
                 Ok(svg) => out.push((svg, chunk.len())),
                 Err(_) => {
@@ -521,6 +554,34 @@ mod tests {
         let result = parse_uri("otpauth://totp/Example:user?secret=JBSWY3DPEHPK3PXP").unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].issuer, "Example");
+    }
+
+    #[test]
+    fn rejects_unknown_otpauth_algorithm_instead_of_silently_using_sha1() {
+        let result = parse_uri(
+            "otpauth://totp/Example:user?secret=JBSWY3DPEHPK3PXP&algorithm=MD5",
+        );
+        assert_eq!(result.unwrap_err(), "不支持的验证码算法");
+    }
+
+    #[test]
+    fn rejects_truncated_migration_payload() {
+        let encoded = base64::engine::general_purpose::STANDARD.encode([0x0a, 0x7f, 0x01]);
+        let result = parse_uri(&format!("otpauth-migration://offline?data={encoded}"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn refuses_custom_period_google_migration_export() {
+        let account = QrAccount {
+            issuer: "Example".into(),
+            name: "user".into(),
+            secret: "JBSWY3DPEHPK3PXP".into(),
+            algorithm: "SHA1".into(),
+            digits: 6,
+            period: 60,
+        };
+        assert!(migration_qrs(&[account]).is_err());
     }
 
     #[test]

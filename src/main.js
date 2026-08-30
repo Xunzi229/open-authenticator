@@ -21,7 +21,7 @@ async function call(name, args = {}) {
     if (res && res.ok === false) throw new Error(res.error || '失败')
     return res || { ok: true }
   } catch (e) {
-    throw new Error(String(e))
+    throw new Error(String(e?.message || e).replace(/^Error:\s*/, ''))
   }
 }
 
@@ -29,7 +29,7 @@ const $ = (id) => document.getElementById(id)
 const esc = (s) => String(s || '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
 const fmt = (code) => {
   const s = String(code || '')
-  return s.length === 6 ? `${s.slice(0, 3)} ${s.slice(3)}` : s
+  return s.length === 6 ? `${s.slice(0, 3)} ${s.slice(3)}` : s.length === 8 ? `${s.slice(0, 4)} ${s.slice(4)}` : s
 }
 function hue(s) {
   let h = 0
@@ -72,7 +72,7 @@ function paintList() {
       ${g.items.map((a) => {
         const shown = state.shown.has(a.id)
         const danger = Number(state.remains[a.id] || a.period || 30) <= 5
-        const code = shown ? fmt(state.codes[a.id] || '') : '••• •••'
+        const code = shown ? fmt(state.codes[a.id] || '') : (a.digits === 8 ? '•••• ••••' : '••• •••')
         const sub = [a.email, a.notes].filter(Boolean).join(' · ')
         return `<div class="row ${shown ? 'shown' : ''} ${danger && shown ? 'danger' : ''}" data-id="${a.id}">
           <div class="avatar" style="${avatarStyle(a.issuer || a.name)}">${esc((a.issuer || a.name || '?')[0])}</div>
@@ -121,7 +121,11 @@ async function copyCode(id, btn) {
   setTimeout(() => { row.classList.remove('copied'); btn.innerHTML = COPY }, 900)
   const sec = Number(state.settings.clipboard_clear_seconds || 0)
   if (clipTimer) clearTimeout(clipTimer)
-  if (sec > 0) clipTimer = setTimeout(() => navigator.clipboard.writeText('').catch(() => {}), sec * 1000)
+  if (sec > 0) clipTimer = setTimeout(async () => {
+    try {
+      if (await navigator.clipboard.readText() === code) await navigator.clipboard.writeText('')
+    } catch (_) {}
+  }, sec * 1000)
 }
 
 function closePrompt() {
@@ -334,13 +338,14 @@ function paintExport() {
   const box = $('export-qr')
   if (!box) return
   if (!data || !data.qrs || !data.qrs.length) {
-    box.innerHTML = '<p class="hint">没有可导出的账号</p>'
+    box.innerHTML = `${data?.migration_warning ? `<p class="err">${esc(data.migration_warning)}</p>` : ''}<p class="hint">没有可生成 Google 转移二维码的标准 30 秒账号，可下载 JSON 或链接备份。</p>`
     return
   }
   const n = data.qrs.length
   if (state.qrPage >= n) state.qrPage = 0
   const cur = data.qrs[state.qrPage]
   box.innerHTML = `
+    ${data.migration_warning ? `<p class="err">${esc(data.migration_warning)}</p>` : ''}
     <div class="qr-box">${cur.svg}</div>
     <div class="qr-cap">第 ${state.qrPage + 1}/${n} 张 · ${cur.count} 个账号<br>用 Google 验证器「转移账号」扫描</div>
     ${n > 1 ? `<div class="row-btns">
@@ -456,6 +461,10 @@ function openTransfer() {
 }
 
 function readImportFile(file) {
+  if (file.size > 10 * 1024 * 1024) {
+    $('form-err').textContent = '导入文件不能超过 10 MiB'
+    return
+  }
   const name = file.name || ''
   const isImg = (file.type || '').startsWith('image/') || /\.(png|jpe?g|gif|webp|bmp)$/i.test(name)
   if (isImg) {
@@ -495,8 +504,8 @@ function renderSettings(s) {
     <p class="sec-title">常规</p>
     <section class="block">
       <div class="grid-2">
-        ${field('autolock_seconds', '自动锁定（秒）', s.autolock_seconds, 'type="number" min="0"')}
-        ${field('clipboard_clear_seconds', '清空剪贴板（秒）', s.clipboard_clear_seconds, 'type="number" min="0"')}
+        ${field('autolock_seconds', '自动锁定（秒）', s.autolock_seconds, 'type="number" min="0" max="2678400"')}
+        ${field('clipboard_clear_seconds', '清空剪贴板（秒）', s.clipboard_clear_seconds, 'type="number" min="0" max="86400"')}
       </div>
       <p class="hint">填 0 表示关闭该项。</p>
     </section>
@@ -516,7 +525,9 @@ function renderSettings(s) {
         ${field('webdav_user', '用户名', s.webdav_user)}
         ${field('webdav_password', '密码', '', 'type="password" placeholder="' + (s.webdav_has_password ? '已保存，留空不改' : '') + '"')}
       </div>
-      ${field('webdav_path', '远程文件', s.webdav_path || '/authenticator/vault.enc')}
+        ${field('webdav_path', '远程文件', s.webdav_path || '/authenticator/vault.enc')}
+        <label class="check"><input type="checkbox" name="clear_webdav_password" /> 清除已保存的 WebDAV 密码</label>
+        ${field('remote_vault_password', '远程保险库主密码（仅在与本地不同时填写）', '', 'type="password" autocomplete="off"')}
       <div class="row-btns tight">
         <button type="button" class="ghost" id="btn-down">拉取</button>
         <button type="button" class="ghost" id="btn-up">上传</button>
@@ -544,6 +555,7 @@ function renderSettings(s) {
     webdav_path: val('webdav_path'),
     autolock_seconds: Number(val('autolock_seconds') || 0),
     clipboard_clear_seconds: Number(val('clipboard_clear_seconds') || 0),
+    clear_webdav_password: $('sheet').querySelector('[name="clear_webdav_password"]').checked,
   }})
   const davMsg = (text, kind) => {
     const el = $('dav-err')
@@ -576,7 +588,8 @@ function renderSettings(s) {
   }
   $('btn-up').onclick = () => runDav($('btn-up'), '正在上传…', () => call('webdav_upload'), '已上传加密保险库')
   $('btn-down').onclick = () => runDav($('btn-down'), '正在拉取…', async () => {
-    await call('webdav_download', { password: '' })
+    if (!window.confirm('拉取会用远程保险库替换本地数据，并自动创建本地加密备份。确定继续？')) throw new Error('已取消拉取')
+    await call('webdav_download', { password: val('remote_vault_password') })
     await refresh()
   }, '已从远程覆盖本地')
   $('btn-pw').onclick = async () => {
@@ -636,11 +649,11 @@ async function showGate() {
   $('gate-sub').textContent = isSetup ? '首次使用，请设置主密码（至少 8 位）' : (bio.enabled ? '指纹或主密码解锁' : '输入主密码解锁')
   $('gate-btn').textContent = isSetup ? '创建保险库' : '解锁'
   document.querySelector('.setup-only').classList.toggle('hidden', !isSetup)
-  $('btn-bio').classList.toggle('hidden', isSetup || !bio.enabled)
+  $('btn-bio').classList.toggle('hidden', isSetup || !bio.available || !bio.enabled)
   $('pw1').value = ''
   $('pw2').value = ''
   $('gate-err').textContent = ''
-  if (!isSetup && bio.enabled) tryBioUnlock()
+  if (!isSetup && bio.available && bio.enabled) tryBioUnlock()
 }
 
 async function tryBioUnlock() {
@@ -681,6 +694,8 @@ async function reportActivity() {
 }
 document.addEventListener('pointerdown', reportActivity, { passive: true })
 document.addEventListener('keydown', reportActivity)
+document.addEventListener('wheel', reportActivity, { passive: true })
+document.addEventListener('touchmove', reportActivity, { passive: true })
 $('modal').addEventListener('click', (e) => {
   if (e.target.id === 'modal' && $('prompt').classList.contains('hidden')) closeModal()
 })
@@ -702,8 +717,12 @@ $('list').addEventListener('click', async (e) => {
     return
   }
   if (act === 'edit') {
-    const res = await call('get_account', { id })
-    openEditor(res.account)
+    try {
+      const res = await call('get_account', { id })
+      openEditor(res.account)
+    } catch (error) {
+      if (String(error.message).includes('锁定')) await showGate()
+    }
     return
   }
   if (act === 'del') {

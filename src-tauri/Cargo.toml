@@ -1,6 +1,6 @@
 [package]
 name = "authenticator"
-version = "1.0.0"
+version = "1.0.0-pre.14"
 description = "Encrypted cross-platform TOTP authenticator"
 authors = ["local"]
 edition = "2021"
@@ -29,12 +29,13 @@ data-encoding = "2"
 hex = "0.4"
 base64 = "0.22"
 url = "2"
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls-native-roots"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
 rqrr = "0.7"
 percent-encoding = "2"
 dirs = "6"
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
+zeroize = "1"
 
 [profile.release]
 panic = "abort"

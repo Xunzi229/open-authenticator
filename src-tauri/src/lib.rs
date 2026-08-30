@@ -6,6 +6,7 @@ mod vault;
 mod webdav;
 
 use std::path::Path;
+use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
@@ -16,6 +17,7 @@ use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Manager, State, WebviewWindow};
 use vault::{Account, Vault, MIN_PASSWORD};
+use zeroize::{Zeroize, Zeroizing};
 
 static QUITTING: AtomicBool = AtomicBool::new(false);
 
@@ -84,9 +86,9 @@ fn window_hwnd(window: &WebviewWindow) -> isize {
     }
 }
 
-fn bio_password(window: &WebviewWindow, message: &str) -> Result<String, String> {
+fn bio_password(window: &WebviewWindow, message: &str) -> Result<Zeroizing<String>, String> {
     bio::prompt(window_hwnd(window), message)?;
-    bio::take()
+    bio::take().map(Zeroizing::new)
 }
 
 fn resolve_password(
@@ -94,11 +96,11 @@ fn resolve_password(
     password: String,
     biometric: bool,
     message: &str,
-) -> Result<String, String> {
+) -> Result<Zeroizing<String>, String> {
     if biometric {
         bio_password(window, message)
     } else {
-        Ok(password)
+        Ok(Zeroizing::new(password))
     }
 }
 
@@ -114,7 +116,8 @@ fn ok(extra: Value) -> Result<Value, String> {
 
 #[tauri::command]
 fn status(state: State<AppState>) -> Result<Value, String> {
-    let v = state.vault.lock().map_err(|e| e.to_string())?;
+    let mut v = state.vault.lock().map_err(|e| e.to_string())?;
+    v.check_timeout();
     ok(json!({
         "exists": v.exists(),
         "unlocked": v.unlocked(),
@@ -126,12 +129,15 @@ fn status(state: State<AppState>) -> Result<Value, String> {
 
 #[tauri::command]
 fn setup(state: State<AppState>, password: String, confirm: String) -> Result<Value, String> {
+    let password = Zeroizing::new(password);
+    let confirm = Zeroizing::new(confirm);
     state.vault.lock().map_err(|e| e.to_string())?.setup(&password, &confirm)?;
     ok(json!({}))
 }
 
 #[tauri::command]
 fn unlock(state: State<AppState>, password: String) -> Result<Value, String> {
+    let password = Zeroizing::new(password);
     state.vault.lock().map_err(|e| e.to_string())?.unlock(&password)?;
     ok(json!({}))
 }
@@ -259,6 +265,9 @@ fn delete_account(state: State<AppState>, id: String) -> Result<Value, String> {
 
 #[tauri::command]
 fn import_uri(state: State<AppState>, uri: String) -> Result<Value, String> {
+    if uri.len() > 2 * 1024 * 1024 {
+        return Err("导入内容过大".into());
+    }
     let items = qr::parse_uri(&uri)?;
     let count = state.vault.lock().map_err(|e| e.to_string())?.add_many(items)?;
     ok(json!({ "count": count }))
@@ -266,10 +275,17 @@ fn import_uri(state: State<AppState>, uri: String) -> Result<Value, String> {
 
 #[tauri::command]
 fn import_qr(state: State<AppState>, image_b64: String) -> Result<Value, String> {
+    const MAX_IMAGE_B64: usize = 14 * 1024 * 1024;
+    if image_b64.len() > MAX_IMAGE_B64 {
+        return Err("二维码图片不能超过 10 MiB".into());
+    }
     let raw = image_b64.split(',').next_back().unwrap_or(&image_b64);
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(raw)
         .map_err(|_| "图片解码失败")?;
+    if bytes.len() > 10 * 1024 * 1024 {
+        return Err("二维码图片不能超过 10 MiB".into());
+    }
     let items = qr::decode_image(&bytes)?;
     let count = state.vault.lock().map_err(|e| e.to_string())?.add_many(items)?;
     ok(json!({ "count": count }))
@@ -288,6 +304,9 @@ fn to_qr(a: &Account) -> qr::QrAccount {
 
 #[tauri::command]
 fn import_text(state: State<AppState>, text: String) -> Result<Value, String> {
+    if text.len() > 16 * 1024 * 1024 {
+        return Err("导入文件不能超过 16 MiB".into());
+    }
     let items = qr::parse_text(&text)?;
     let count = state.vault.lock().map_err(|e| e.to_string())?.add_many(items)?;
     ok(json!({ "count": count }))
@@ -320,10 +339,16 @@ fn export_data(
         })
         .collect();
     let txt = qrs.iter().map(qr::otpauth_uri).collect::<Vec<_>>().join("\n");
-    let images = if qrs.is_empty() {
+    let migration_accounts: Vec<qr::QrAccount> = qrs
+        .iter()
+        .filter(|account| account.period == 30)
+        .cloned()
+        .collect();
+    let excluded = qrs.len() - migration_accounts.len();
+    let images = if migration_accounts.is_empty() {
         vec![]
     } else {
-        qr::migration_qrs(&qrs)?
+        qr::migration_qrs(&migration_accounts)?
             .into_iter()
             .enumerate()
             .map(|(i, (svg, count))| json!({ "svg": svg, "index": i, "count": count }))
@@ -333,7 +358,12 @@ fn export_data(
         "json": serde_json::to_string_pretty(&json_acc).unwrap_or_default(),
         "txt": txt,
         "qrs": images,
-        "total": qrs.len()
+        "total": qrs.len(),
+        "migration_warning": if excluded > 0 {
+            format!("有 {excluded} 个非 30 秒周期账号未包含在 Google 转移二维码中，请使用 JSON 或链接备份")
+        } else {
+            String::new()
+        }
     }))
 }
 
@@ -362,6 +392,7 @@ struct SettingsIn {
     webdav_path: Option<String>,
     autolock_seconds: Option<u64>,
     clipboard_clear_seconds: Option<u64>,
+    clear_webdav_password: Option<bool>,
 }
 
 #[tauri::command]
@@ -370,19 +401,38 @@ fn save_settings(state: State<AppState>, data: SettingsIn) -> Result<Value, Stri
     let mut s = v.settings()?;
     if let Some(x) = data.webdav_url { s.webdav_url = x; }
     if let Some(x) = data.webdav_user { s.webdav_user = x; }
-    if let Some(x) = data.webdav_password { s.webdav_password = x; }
+    if data.clear_webdav_password.unwrap_or(false) {
+        s.webdav_password.clear();
+    } else if let Some(x) = data.webdav_password {
+        s.webdav_password = x;
+    }
     if let Some(x) = data.webdav_path { s.webdav_path = x; }
     if let Some(x) = data.autolock_seconds { s.autolock_seconds = x; }
     if let Some(x) = data.clipboard_clear_seconds { s.clipboard_clear_seconds = x; }
-    v.update_settings(s)?;
+    v.update_settings(s, !data.clear_webdav_password.unwrap_or(false))?;
     ok(json!({}))
 }
 
 #[tauri::command]
 fn change_password(state: State<AppState>, old: String, new_password: String, confirm: String) -> Result<Value, String> {
-    state.vault.lock().map_err(|e| e.to_string())?.change_password(&old, &new_password, &confirm)?;
-    if bio::enabled() {
+    let old = Zeroizing::new(old);
+    let new_password = Zeroizing::new(new_password);
+    let confirm = Zeroizing::new(confirm);
+    let mut old_bio = bio::stored_password()?;
+    if old_bio.is_some() {
         bio::store(&new_password)?;
+    }
+    if let Err(error) = state.vault.lock().map_err(|e| e.to_string())?.change_password(&old, &new_password, &confirm) {
+        if let Some(password) = old_bio.as_deref() {
+            bio::store(password).map_err(|rollback| format!("{error}；恢复系统凭据失败：{rollback}"))?;
+        }
+        if let Some(password) = old_bio.as_mut() {
+            password.zeroize();
+        }
+        return Err(error);
+    }
+    if let Some(password) = old_bio.as_mut() {
+        password.zeroize();
     }
     ok(json!({}))
 }
@@ -398,8 +448,31 @@ fn save_text(name: String, content: String) -> Result<Value, String> {
     }
     let dir = dirs::download_dir().ok_or_else(|| "找不到下载文件夹".to_string())?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let path = dir.join(file.as_ref());
-    std::fs::write(&path, content).map_err(|e| e.to_string())?;
+    let source = Path::new(file.as_ref());
+    let stem = source.file_stem().and_then(|value| value.to_str()).unwrap_or("authenticator");
+    let extension = source.extension().and_then(|value| value.to_str());
+    let mut saved = None;
+    for index in 0..1000 {
+        let candidate = if index == 0 {
+            file.to_string()
+        } else if let Some(extension) = extension {
+            format!("{stem} ({index}).{extension}")
+        } else {
+            format!("{stem} ({index})")
+        };
+        let path = dir.join(candidate);
+        match std::fs::OpenOptions::new().create_new(true).write(true).open(&path) {
+            Ok(mut output) => {
+                output.write_all(content.as_bytes()).map_err(|e| e.to_string())?;
+                output.sync_all().map_err(|e| e.to_string())?;
+                saved = Some(path);
+                break;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+    let path = saved.ok_or_else(|| "无法生成不重复的导出文件名".to_string())?;
     ok(json!({ "path": path.to_string_lossy() }))
 }
 
@@ -409,11 +482,20 @@ async fn webdav_upload(state: State<'_, AppState>) -> Result<Value, String> {
         let mut v = state.vault.lock().map_err(|e| e.to_string())?;
         (v.settings()?, v.encrypted_bytes()?)
     };
-    tauri::async_runtime::spawn_blocking(move || {
-        webdav::put(&s.webdav_url, &s.webdav_path, &s.webdav_user, &s.webdav_password, &blob)
+    let expected_etag = (!s.webdav_etag.is_empty()).then(|| s.webdav_etag.clone());
+    let etag = tauri::async_runtime::spawn_blocking(move || {
+        webdav::put(
+            &s.webdav_url,
+            &s.webdav_path,
+            &s.webdav_user,
+            &s.webdav_password,
+            &blob,
+            expected_etag.as_deref(),
+        )
     })
     .await
     .map_err(|e| e.to_string())??;
+    state.vault.lock().map_err(|e| e.to_string())?.set_webdav_etag(etag)?;
     ok(json!({}))
 }
 
@@ -425,16 +507,20 @@ async fn webdav_download(state: State<'_, AppState>, password: String) -> Result
         let pw = if password.is_empty() {
             v.password().ok_or_else(|| "请先解锁".to_string())?
         } else {
-            password
+            Zeroizing::new(password)
         };
         (s, pw)
     };
-    let blob = tauri::async_runtime::spawn_blocking(move || {
+    let download = tauri::async_runtime::spawn_blocking(move || {
         webdav::get(&s.webdav_url, &s.webdav_path, &s.webdav_user, &s.webdav_password)
     })
     .await
     .map_err(|e| e.to_string())??;
-    state.vault.lock().map_err(|e| e.to_string())?.replace_bytes(&blob, &pw)?;
+    state
+        .vault
+        .lock()
+        .map_err(|e| e.to_string())?
+        .replace_bytes(&download.bytes, &pw, &download.etag)?;
     ok(json!({}))
 }
 
@@ -448,6 +534,7 @@ fn bio_status() -> Result<Value, String> {
 
 #[tauri::command]
 fn bio_enable(window: WebviewWindow, state: State<AppState>, password: String) -> Result<Value, String> {
+    let password = Zeroizing::new(password);
     {
         let mut v = state.vault.lock().map_err(|e| e.to_string())?;
         v.verify_password(&password)?;
@@ -481,6 +568,15 @@ pub fn run() {
         })
         .setup(|app| {
             setup_tray(app)?;
+            let handle = app.handle().clone();
+            std::thread::spawn(move || {
+                while !QUITTING.load(Ordering::Relaxed) {
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                    if let Ok(mut vault) = handle.state::<AppState>().vault.lock() {
+                        vault.check_timeout();
+                    }
+                }
+            });
             Ok(())
         })
         .on_window_event(|window, event| {

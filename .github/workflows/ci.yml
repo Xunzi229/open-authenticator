@@ -20,7 +20,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
@@ -28,7 +28,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -39,14 +39,21 @@ jobs:
         with:
           workspaces: src-tauri -> target
 
+      - run: cargo generate-lockfile --manifest-path src-tauri/Cargo.toml
+      - run: cargo fmt --manifest-path src-tauri/Cargo.toml
+
+      - uses: actions/upload-artifact@v7
+        if: runner.os == 'Windows'
+        with:
+          name: generated-rust
+          path: |
+            src-tauri/Cargo.lock
+            src-tauri/src/*.rs
+          retention-days: 1
+
       - run: npm ci
       - run: npm run build
-      - run: cargo test --manifest-path src-tauri/Cargo.toml
-      - run: npx tauri build --debug
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: authenticator-${{ runner.os }}-${{ runner.arch }}-debug-bundles
-          path: src-tauri/target/debug/bundle/**
-          if-no-files-found: error
-          retention-days: 7
+      - run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
+      - run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+      - run: cargo test --locked --manifest-path src-tauri/Cargo.toml
+      - run: npx tauri build --debug --no-bundle
