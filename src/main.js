@@ -120,7 +120,17 @@ async function copyCode(id, btn) {
   if (sec > 0) clipTimer = setTimeout(() => navigator.clipboard.writeText('').catch(() => {}), sec * 1000)
 }
 
+function closePrompt() {
+  $('prompt').classList.add('hidden')
+  $('prompt-sheet').innerHTML = ''
+  $('prompt').onclick = null
+}
+function openPrompt(html) {
+  $('prompt-sheet').innerHTML = html
+  $('prompt').classList.remove('hidden')
+}
 function closeModal() {
+  closePrompt()
   $('modal').classList.add('hidden')
   $('sheet').innerHTML = ''
   state.export = null
@@ -130,8 +140,64 @@ function closeModal() {
   }
 }
 function openModal(html) {
+  closePrompt()
   $('sheet').innerHTML = html
   $('modal').classList.remove('hidden')
+}
+function askAuth(hint, run) {
+  return new Promise((resolve) => {
+    let done = false
+    openPrompt(`
+      <h2>验证身份</h2>
+      <p class="hint">${esc(hint)}</p>
+      ${field('auth-pw', '主密码', '', 'type="password" autocomplete="current-password"')}
+      <p class="err" id="auth-err"></p>
+      <div class="row-btns">
+        <button type="button" class="ghost" id="auth-cancel">取消</button>
+        ${bio.enabled ? '<button type="button" class="ghost" id="auth-bio">指纹验证</button>' : ''}
+        <button type="button" class="primary" id="auth-ok">验证</button>
+      </div>
+    `)
+    const finish = (value) => {
+      if (done) return
+      done = true
+      closePrompt()
+      resolve(value)
+    }
+    $('auth-cancel').onclick = () => finish(null)
+    $('prompt').onclick = (e) => { if (e.target.id === 'prompt') finish(null) }
+    const go = async (biometric) => {
+      if (done) return
+      const pw = biometric ? '' : ($('prompt-sheet').querySelector('[name="auth-pw"]')?.value || '')
+      if (!biometric && !pw) {
+        $('auth-err').textContent = '请输入主密码'
+        return
+      }
+      $('auth-err').textContent = ''
+      try {
+        finish(await run(pw, biometric))
+      } catch (e) {
+        const err = $('auth-err')
+        if (err) err.textContent = e.message
+      }
+    }
+    $('auth-ok').onclick = () => go(false)
+    const bioBtn = $('auth-bio')
+    if (bioBtn) bioBtn.onclick = () => go(true)
+    const input = $('prompt-sheet').querySelector('[name="auth-pw"]')
+    input?.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); go(false) } })
+    input?.focus()
+  })
+}
+function showAccountQr(svg) {
+  openPrompt(`
+    <h2>账号二维码</h2>
+    <p class="hint">可供其他验证器扫描</p>
+    <div class="qr-box">${svg}</div>
+    <div class="row-btns"><button type="button" class="ghost" id="qr-done">关闭</button></div>
+  `)
+  $('qr-done').onclick = closePrompt
+  $('prompt').onclick = (e) => { if (e.target.id === 'prompt') closePrompt() }
 }
 function field(name, label, value, extra = '') {
   return `<label>${label}<input name="${name}" value="${esc(value || '')}" ${extra} /></label>`
@@ -175,14 +241,13 @@ function openEditor(acc) {
     ${field('email', '邮箱', a.email)}
     <label>备注<textarea name="notes">${esc(a.notes)}</textarea></label>
     ${field('secret', acc ? '密钥（留空则不改）' : '密钥', acc ? '' : a.secret, 'spellcheck="false" autocomplete="off"')}
-    ${acc ? field('reauth', '验证主密码（改密钥或看二维码时必填）', '', 'type="password" autocomplete="current-password"') : ''}
     <label>算法<select name="algorithm">
       <option ${a.algorithm === 'SHA1' ? 'selected' : ''}>SHA1</option>
       <option ${a.algorithm === 'SHA256' ? 'selected' : ''}>SHA256</option>
       <option ${a.algorithm === 'SHA512' ? 'selected' : ''}>SHA512</option>
     </select></label>
     ${field('digits', '位数', a.digits, 'type="number" min="6" max="8"')}
-    ${acc ? '<div id="acc-qr"><button type="button" class="ghost" id="btn-show-qr">验证后显示二维码</button>' + (bio.enabled ? '<button type="button" class="ghost" id="btn-show-qr-bio" style="margin-top:8px">使用指纹显示二维码</button>' : '') + '</div>' : ''}
+    ${acc ? '<button type="button" class="link-btn" id="btn-show-qr">显示二维码</button>' : ''}
     <p class="err" id="form-err"></p>
     <div class="row-btns">
       <button type="button" class="ghost" data-close>取消</button>
@@ -193,18 +258,15 @@ function openEditor(acc) {
   $('sheet').querySelector('[data-close]').onclick = closeModal
   $('btn-save').onclick = async () => {
     const data = Object.fromEntries([...$('sheet').querySelectorAll('input,textarea,select')].map((n) => [n.name, n.name === 'digits' ? Number(n.value) : n.value]))
-    const password = data.reauth || ''
-    delete data.reauth
     try {
       if (acc) {
-        if (String(data.secret || '').trim() && !password) {
-          if (bio.enabled) {
-            await call('update_account', { id: acc.id, data, password: '', biometric: true })
-          } else {
-            throw new Error('更改密钥请先填写主密码')
-          }
+        if (String(data.secret || '').trim()) {
+          const ok = await askAuth('更改密钥需要验证主密码', (password, biometric) =>
+            call('update_account', { id: acc.id, data, password, biometric })
+          )
+          if (!ok) return
         } else {
-          await call('update_account', { id: acc.id, data, password, biometric: false })
+          await call('update_account', { id: acc.id, data, password: '', biometric: false })
         }
       } else {
         await call('add_account', { data })
@@ -216,17 +278,13 @@ function openEditor(acc) {
   const del = $('btn-del')
   if (del) del.onclick = () => askDelete(acc)
   const showQr = $('btn-show-qr')
-  const showQrBio = $('btn-show-qr-bio')
-  const loadQr = async (biometric) => {
-    const pw = biometric ? '' : ($('sheet').querySelector('[name="reauth"]')?.value || '')
-    const box = $('acc-qr')
-    try {
-      const res = await call('account_qr', { id: acc.id, password: pw, biometric })
-      box.innerHTML = `<p class="hint">导出二维码，可供其他验证器扫描</p><div class="mini-qr">${res.svg}</div>`
-    } catch (e) { $('form-err').textContent = e.message }
+  if (showQr) showQr.onclick = async () => {
+    const res = await askAuth('查看二维码需要验证主密码', (password, biometric) =>
+      call('account_qr', { id: acc.id, password, biometric })
+    )
+    if (!res) return
+    showAccountQr(res.svg)
   }
-  if (showQr) showQr.onclick = () => loadQr(false)
-  if (showQrBio) showQrBio.onclick = () => loadQr(true)
 }
 
 function askDelete(acc) {
@@ -323,6 +381,10 @@ function showPane(name) {
   $('tab-out').classList.toggle('on', name === 'out')
 }
 
+function imported(count) {
+  alert(count ? '已导入 ' + count + ' 个账号' : '没有新账号，重复项已跳过')
+}
+
 function openTransfer() {
   openModal(`
     <h2>导入导出</h2>
@@ -379,7 +441,7 @@ function openTransfer() {
         : await call('import_text', { text })
       closeModal()
       await refresh()
-      alert('已导入 ' + res.count + ' 个账号')
+      imported(res.count)
     } catch (e) { $('form-err').textContent = e.message }
   }
   $('btn-json').onclick = () => saveExport('authenticator.json', state.export?.json)
@@ -396,7 +458,7 @@ function readImportFile(file) {
         const res = await call('import_qr', { imageB64: reader.result })
         closeModal()
         await refresh()
-        alert('已导入 ' + res.count + ' 个账号')
+        imported(res.count)
       } catch (e) { $('form-err').textContent = e.message }
     }
     reader.readAsDataURL(file)
@@ -407,7 +469,7 @@ function readImportFile(file) {
       const res = await call('import_text', { text })
       closeModal()
       await refresh()
-      alert('已导入 ' + res.count + ' 个账号')
+      imported(res.count)
     } catch (e) { $('form-err').textContent = e.message }
   })
 }
@@ -571,7 +633,9 @@ $('btn-add').onclick = () => openEditor(null)
 $('btn-io').onclick = openTransfer
 $('btn-set').onclick = openSettings
 $('q').addEventListener('input', () => { state.q = $('q').value; paintList() })
-$('modal').addEventListener('click', (e) => { if (e.target.id === 'modal') closeModal() })
+$('modal').addEventListener('click', (e) => {
+  if (e.target.id === 'modal' && $('prompt').classList.contains('hidden')) closeModal()
+})
 function currentWindow() {
   return window.__TAURI__?.window?.getCurrentWindow?.()
 }

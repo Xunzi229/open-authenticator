@@ -227,8 +227,28 @@ button { font: inherit; cursor: pointer; }
 .row-btns button { flex: 1; border: 0; border-radius: 10px; padding: 10px; font-weight: 600; width: auto; }
 .sheet .err { margin: 0 4px 10px; }
 .sheet-actions { margin: 0; }
-.ghost { background: var(--fill); color: var(--text); }
+.modal.front { z-index: 40; }
+.ghost {
+  border: 0;
+  border-radius: 12px;
+  padding: 11px;
+  background: var(--fill);
+  color: var(--text);
+  font-weight: 600;
+}
 .ghost:hover { background: var(--row-hover); }
+.link-btn {
+  display: block;
+  width: 100%;
+  margin: 4px 0 6px;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font-weight: 600;
+  padding: 8px 0;
+  text-align: center;
+}
+.link-btn:hover { color: var(--accent-press); }
 .danger-btn { background: rgba(255, 69, 58, .16); color: var(--danger); }
 .drop {
   border: 1px dashed rgba(255,255,255,.16); border-radius: 12px; padding: 22px 14px;

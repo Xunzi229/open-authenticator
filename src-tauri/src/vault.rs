@@ -1,5 +1,6 @@
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::thread;
@@ -263,6 +264,12 @@ impl Vault {
     }
 
     pub fn add_many(&mut self, items: Vec<QrAccount>) -> Result<usize, String> {
+        let mut seen: HashSet<String> = self
+            .need()?
+            .accounts
+            .iter()
+            .map(|a| a.secret.replace(' ', "").to_ascii_uppercase())
+            .collect();
         let mut added = Vec::new();
         for it in items {
             let mut a = Account {
@@ -279,9 +286,15 @@ impl Vault {
                 updated: 0,
             };
             normalize(&mut a)?;
+            if !seen.insert(a.secret.clone()) {
+                continue;
+            }
             added.push(a);
         }
         let n = added.len();
+        if n == 0 {
+            return Ok(0);
+        }
         self.need()?.accounts.extend(added);
         self.save()?;
         Ok(n)
