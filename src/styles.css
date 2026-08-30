@@ -159,9 +159,30 @@ button { font: inherit; cursor: pointer; }
   padding: 18px 16px 16px;
   box-shadow: var(--shadow);
 }
-.sheet h2 { margin: 0 0 12px; font-size: 17px; font-weight: 700; letter-spacing: -.02em; }
-.row-btns { display: flex; gap: 8px; margin-top: 14px; }
-.row-btns button { flex: 1; border: 0; border-radius: 10px; padding: 10px; font-weight: 600; }
+.sheet h2 { margin: 0 0 14px; font-size: 20px; font-weight: 700; letter-spacing: -.03em; }
+.sec-title {
+  margin: 0 4px 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  letter-spacing: .02em;
+}
+.block {
+  background: var(--row);
+  border-radius: 12px;
+  padding: 12px;
+  margin-bottom: 16px;
+}
+.block label { margin-bottom: 8px; }
+.block > label:last-of-type { margin-bottom: 0; }
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px; }
+.grid-2 label { margin-bottom: 0; }
+.block .hint { margin: 8px 0 0; }
+.row-btns { display: flex; gap: 8px; margin-top: 10px; }
+.row-btns.tight { margin-top: 8px; }
+.row-btns button { flex: 1; border: 0; border-radius: 10px; padding: 10px; font-weight: 600; width: auto; }
+.sheet .err { margin: 0 4px 10px; }
+.sheet-actions { margin: 0; }
 .ghost { background: var(--fill); color: var(--text); }
 .ghost:hover { background: var(--row-hover); }
 .danger-btn { background: rgba(255, 69, 58, .16); color: var(--danger); }

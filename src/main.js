@@ -335,26 +335,39 @@ function openSettings() {
   const s = state.settings || {}
   openModal(`
     <h2>设置</h2>
-    ${field('webdav_url', 'WebDAV 地址', s.webdav_url, 'placeholder="https://dav.example.com/"')}
-    ${field('webdav_user', 'WebDAV 用户名', s.webdav_user)}
-    ${field('webdav_password', 'WebDAV 密码', '', 'type="password" placeholder="' + (s.webdav_has_password ? '已保存，留空不改' : '') + '"')}
-    ${field('webdav_path', '远程文件路径', s.webdav_path || '/authenticator/vault.enc')}
-    ${field('autolock_seconds', '自动锁定（秒，0 关闭）', s.autolock_seconds, 'type="number" min="0"')}
-    ${field('clipboard_clear_seconds', '复制后清空剪贴板（秒，0 关闭）', s.clipboard_clear_seconds, 'type="number" min="0"')}
-    <h2 style="margin-top:18px">修改主密码</h2>
-    ${field('old', '当前主密码', '', 'type="password"')}
-    ${field('newpw', '新主密码', '', 'type="password"')}
-    ${field('new2', '确认新密码', '', 'type="password"')}
+    <p class="sec-title">常规</p>
+    <section class="block">
+      <div class="grid-2">
+        ${field('autolock_seconds', '自动锁定（秒）', s.autolock_seconds, 'type="number" min="0"')}
+        ${field('clipboard_clear_seconds', '清空剪贴板（秒）', s.clipboard_clear_seconds, 'type="number" min="0"')}
+      </div>
+      <p class="hint">填 0 表示关闭该项。</p>
+    </section>
+    <p class="sec-title">WebDAV 同步</p>
+    <section class="block">
+      ${field('webdav_url', '服务器地址', s.webdav_url, 'placeholder="https://dav.example.com/"')}
+      <div class="grid-2">
+        ${field('webdav_user', '用户名', s.webdav_user)}
+        ${field('webdav_password', '密码', '', 'type="password" placeholder="' + (s.webdav_has_password ? '已保存，留空不改' : '') + '"')}
+      </div>
+      ${field('webdav_path', '远程文件', s.webdav_path || '/authenticator/vault.enc')}
+      <div class="row-btns tight">
+        <button type="button" class="ghost" id="btn-down">拉取</button>
+        <button type="button" class="ghost" id="btn-up">上传</button>
+      </div>
+    </section>
+    <p class="sec-title">主密码</p>
+    <section class="block">
+      ${field('old', '当前密码', '', 'type="password"')}
+      ${field('newpw', '新密码', '', 'type="password"')}
+      ${field('new2', '确认新密码', '', 'type="password"')}
+      <div class="row-btns tight"><button type="button" class="danger-btn" id="btn-pw">更新主密码</button></div>
+    </section>
     <p class="err" id="form-err"></p>
-    <div class="row-btns">
+    <div class="row-btns sheet-actions">
       <button type="button" class="ghost" data-close>关闭</button>
-      <button type="button" class="ghost" id="btn-up">上传 WebDAV</button>
-    </div>
-    <div class="row-btns">
-      <button type="button" class="ghost" id="btn-down">从 WebDAV 拉取</button>
       <button type="button" class="primary" id="btn-save-set">保存设置</button>
-    </div>
-    <div class="row-btns"><button type="button" class="danger-btn" id="btn-pw">更新主密码</button></div>`)
+    </div>`)
   $('sheet').querySelector('[data-close]').onclick = closeModal
   const val = (name) => $('sheet').querySelector('[name="' + name + '"]').value
   $('btn-save-set').onclick = async () => {
