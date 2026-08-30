@@ -2,6 +2,7 @@ use reqwest::blocking::{Client, Response};
 use reqwest::header::{CONTENT_LENGTH, ETAG, IF_MATCH, IF_NONE_MATCH};
 use reqwest::redirect::Policy;
 use reqwest::StatusCode;
+use sha2::{Digest, Sha256};
 use std::io::Read;
 use url::Url;
 
@@ -78,14 +79,52 @@ fn response_etag(resp: &Response) -> Option<String> {
         .map(str::to_string)
 }
 
-fn fetch_etag(client: &Client, dest: &Url, user: &str, pass: &str) -> Result<String, String> {
-    let resp = auth(client.head(dest.clone()), user, pass)
+fn content_validator(bytes: &[u8]) -> String {
+    format!("sha256:{}", hex::encode(Sha256::digest(bytes)))
+}
+
+fn read_download(mut resp: Response) -> Result<Download, String> {
+    if resp
+        .headers()
+        .get(CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+        .is_some_and(|size| size > MAX_REMOTE_BYTES)
+    {
+        return Err("远程保险库超过 16 MiB 限制".into());
+    }
+    let etag = response_etag(&resp);
+    let mut bytes = Vec::new();
+    resp.by_ref()
+        .take(MAX_REMOTE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| e.to_string())?;
+    if bytes.is_empty() {
+        return Err("远程文件是空的".into());
+    }
+    if bytes.len() as u64 > MAX_REMOTE_BYTES {
+        return Err("远程保险库超过 16 MiB 限制".into());
+    }
+    let etag = etag.unwrap_or_else(|| content_validator(&bytes));
+    Ok(Download { bytes, etag })
+}
+
+fn get_optional(
+    client: &Client,
+    dest: &Url,
+    user: &str,
+    pass: &str,
+) -> Result<Option<Download>, String> {
+    let resp = auth(client.get(dest.clone()), user, pass)
         .send()
         .map_err(|e| e.to_string())?;
-    if !resp.status().is_success() {
-        return Err(fail("WebDAV 检查", resp.status()));
+    if resp.status() == StatusCode::NOT_FOUND {
+        return Ok(None);
     }
-    response_etag(&resp).ok_or_else(|| "WebDAV 服务器未提供 ETag，无法安全同步".into())
+    if resp.status() != StatusCode::OK {
+        return Err(fail("WebDAV 下载", resp.status()));
+    }
+    read_download(resp).map(Some)
 }
 
 fn ensure_collections(
@@ -133,61 +172,54 @@ pub fn put(
     let (base, dest) = target(base, path)?;
     let client = client()?;
     ensure_collections(&client, &base, path, user, pass)?;
-    let request = auth(
-        client
-            .put(dest.clone())
-            .header("Content-Type", "application/octet-stream")
-            .header(
-                if expected_etag.is_some() {
-                    IF_MATCH
-                } else {
-                    IF_NONE_MATCH
-                },
-                expected_etag.unwrap_or("*"),
-            )
-            .body(data.to_vec()),
-        user,
-        pass,
-    );
+    let mut request = client
+        .put(dest.clone())
+        .header("Content-Type", "application/octet-stream");
+    match expected_etag {
+        Some(expected) if expected.starts_with("sha256:") => {
+            let current = get_optional(&client, &dest, user, pass)?
+                .ok_or_else(|| "远程保险库已被删除，请先拉取确认状态".to_string())?;
+            if content_validator(&current.bytes) != expected {
+                return Err("远程保险库已被其他设备修改，请先拉取并确认内容".into());
+            }
+            if !current.etag.starts_with("sha256:") {
+                request = request.header(IF_MATCH, current.etag);
+            }
+        }
+        Some(expected) => {
+            request = request.header(IF_MATCH, expected);
+        }
+        None => {
+            if let Some(current) = get_optional(&client, &dest, user, pass)? {
+                if current.bytes == data {
+                    return Ok(current.etag);
+                }
+                return Err("远程保险库已存在，请先拉取并确认内容".into());
+            }
+            request = request.header(IF_NONE_MATCH, "*");
+        }
+    }
+    let request = auth(request.body(data.to_vec()), user, pass);
     let resp = request.send().map_err(|e| e.to_string())?;
     if !matches!(resp.status().as_u16(), 200 | 201 | 204 | 207) {
         return Err(fail("WebDAV 上传", resp.status()));
     }
-    response_etag(&resp).map_or_else(|| fetch_etag(&client, &dest, user, pass), Ok)
+    if let Some(etag) = response_etag(&resp) {
+        return Ok(etag);
+    }
+    let uploaded = get_optional(&client, &dest, user, pass)?
+        .ok_or_else(|| "WebDAV 上传后未找到远程文件".to_string())?;
+    if uploaded.bytes != data {
+        return Err("WebDAV 上传后校验失败，远程内容与本地不一致".into());
+    }
+    Ok(uploaded.etag)
 }
 
 pub fn get(base: &str, path: &str, user: &str, pass: &str) -> Result<Download, String> {
     let (_, dest) = target(base, path)?;
     let client = client()?;
-    let mut resp = auth(client.get(dest), user, pass)
-        .send()
-        .map_err(|e| e.to_string())?;
-    if resp.status() != StatusCode::OK {
-        return Err(fail("WebDAV 下载", resp.status()));
-    }
-    if resp
-        .headers()
-        .get(CONTENT_LENGTH)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.parse::<u64>().ok())
-        .is_some_and(|size| size > MAX_REMOTE_BYTES)
-    {
-        return Err("远程保险库超过 16 MiB 限制".into());
-    }
-    let etag =
-        response_etag(&resp).ok_or_else(|| "WebDAV 服务器未提供 ETag，无法安全同步".to_string())?;
-    let mut bytes = Vec::new();
-    resp.by_ref()
-        .take(MAX_REMOTE_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|e| e.to_string())?;
-    if bytes.is_empty() {
-        return Err("远程文件是空的".into());
-    }
-    if bytes.len() as u64 > MAX_REMOTE_BYTES {
-        return Err("远程保险库超过 16 MiB 限制".into());
-    }
-    Ok(Download { bytes, etag })
+    get_optional(&client, &dest, user, pass)?
+        .ok_or_else(|| "WebDAV 远程保险库不存在".to_string())
 }
 
 #[cfg(test)]
@@ -203,5 +235,14 @@ mod tests {
     #[test]
     fn rejects_credentials_embedded_in_url() {
         assert!(target("https://user:pass@dav.example.com", "/vault.enc").is_err());
+    }
+
+    #[test]
+    fn content_validator_is_stable_and_namespaced() {
+        let first = content_validator(b"vault");
+        assert_eq!(first, content_validator(b"vault"));
+        assert_ne!(first, content_validator(b"other"));
+        assert!(first.starts_with("sha256:"));
+        assert_eq!(first.len(), "sha256:".len() + 64);
     }
 }

@@ -7,7 +7,7 @@ Rust + Tauri 2 跨平台 TOTP 客户端（Windows / Linux / macOS）。系统 We
 - 默认不持久化主密码。Argon2id 派生密钥，AES-256-GCM 加密整个保险库
 - 错误密码递增延迟；空闲自动锁定；复制后可清空剪贴板
 - 列表不带密钥；验证码默认打码
-- WebDAV 只通过 HTTPS（localhost 可用 HTTP）同步 `vault.enc` 密文，并使用 ETag 防止并发覆盖
+- WebDAV 只通过 HTTPS（localhost 可用 HTTP）同步 `vault.enc` 密文；优先使用 ETag 防止并发覆盖，不提供 ETag 的服务器使用 SHA-256 上传前比对和上传后回读校验
 
 Windows Hello 为可选便利功能。开启后，主密码会由当前 Windows 用户的系统凭据存储保护；Hello 验证通过后应用才会读取它。该模式的安全边界是 Windows 用户账户，不等同于硬件密钥直接解密保险库。
 
