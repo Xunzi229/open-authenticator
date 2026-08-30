@@ -21,9 +21,44 @@ html, body {
   background: var(--bg); color: var(--text);
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
   -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 .hidden { display: none !important; }
-.screen { height: 100%; }
+.screen { flex: 1; min-height: 0; }
+.titlebar {
+  display: flex; align-items: stretch; flex-shrink: 0;
+  height: 36px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--line);
+  user-select: none;
+}
+.titlebar-drag {
+  flex: 1; min-width: 0;
+  display: flex; align-items: center; gap: 8px;
+  padding: 0 12px;
+  app-region: drag;
+}
+.titlebar-mark {
+  width: 18px; height: 18px; border-radius: 5px; flex-shrink: 0;
+  display: grid; place-items: center;
+  font-size: 10px; font-weight: 700; color: #fff;
+  background: linear-gradient(180deg, #3a3a3c, #2c2c2e);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.12);
+}
+.titlebar-name {
+  font-size: 12px; font-weight: 600; color: var(--muted);
+  letter-spacing: -.01em;
+}
+.win-btns { display: flex; app-region: no-drag; }
+.win-btns button {
+  width: 46px; height: 36px; border: 0; padding: 0; border-radius: 0;
+  background: transparent; color: var(--muted);
+  display: grid; place-items: center;
+}
+.win-btns button:hover { background: rgba(255,255,255,.08); color: var(--text); }
+.win-btns #win-close:hover { background: #e81123; color: #fff; }
 #gate {
   display: grid; place-items: center;
   background:
@@ -71,7 +106,7 @@ button { font: inherit; cursor: pointer; }
 #app { display: flex; flex-direction: column; background: var(--bg); }
 .head {
   display: flex; align-items: flex-end; gap: 10px;
-  padding: 18px 18px 10px;
+  padding: 12px 18px 10px;
 }
 .title { flex: 1; min-width: 0; }
 .title h1 {
@@ -145,11 +180,12 @@ button { font: inherit; cursor: pointer; }
 }
 .empty strong { display: block; color: var(--text); font-size: 16px; margin-bottom: 6px; }
 .modal {
-  position: fixed; inset: 0;
+  position: fixed; inset: 36px 0 0;
   background: rgba(0,0,0,.46);
   backdrop-filter: blur(18px);
   display: grid; place-items: center;
   padding: 18px;
+  z-index: 30;
 }
 .sheet {
   width: min(400px, 100%); max-height: 88vh; overflow: auto;

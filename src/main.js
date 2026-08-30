@@ -442,6 +442,12 @@ $('btn-io').onclick = openTransfer
 $('btn-set').onclick = openSettings
 $('q').addEventListener('input', () => { state.q = $('q').value; paintList() })
 $('modal').addEventListener('click', (e) => { if (e.target.id === 'modal') closeModal() })
+function currentWindow() {
+  return window.__TAURI__?.window?.getCurrentWindow?.()
+}
+$('win-min').onclick = () => currentWindow()?.minimize()
+$('win-max').onclick = () => currentWindow()?.toggleMaximize()
+$('win-close').onclick = () => currentWindow()?.close()
 $('list').addEventListener('click', async (e) => {
   const row = e.target.closest('.row')
   if (!row) return

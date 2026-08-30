@@ -7,6 +7,23 @@
   <link rel="stylesheet" href="/src/styles.css" />
 </head>
 <body>
+  <header class="titlebar">
+    <div class="titlebar-drag" data-tauri-drag-region>
+      <span class="titlebar-mark">验</span>
+      <span class="titlebar-name">验证器</span>
+    </div>
+    <div class="win-btns">
+      <button type="button" id="win-min" title="最小化">
+        <svg width="10" height="10" viewBox="0 0 10 10"><path d="M1 5h8" stroke="currentColor" stroke-width="1.2"/></svg>
+      </button>
+      <button type="button" id="win-max" title="最大化">
+        <svg width="10" height="10" viewBox="0 0 10 10"><rect x="1.4" y="1.4" width="7.2" height="7.2" rx="1" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>
+      </button>
+      <button type="button" id="win-close" title="关闭">
+        <svg width="10" height="10" viewBox="0 0 10 10"><path d="M2 2l6 6M8 2l-6 6" stroke="currentColor" stroke-width="1.2"/></svg>
+      </button>
+    </div>
+  </header>
   <section id="gate" class="screen">
     <div class="card">
       <div class="logo-mark">验</div>
