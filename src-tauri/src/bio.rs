@@ -97,13 +97,11 @@ fn verify_for_window(
     msg: &windows::core::HSTRING,
 ) -> windows::core::Result<windows::Security::Credentials::UI::UserConsentVerificationResult> {
     use windows::core::factory;
-    use windows::Security::Credentials::UI::UserConsentVerifier;
+    use windows::Security::Credentials::UI::{UserConsentVerificationResult, UserConsentVerifier};
     use windows::Win32::Foundation::HWND;
     use windows::Win32::System::WinRT::IUserConsentVerifierInterop;
     use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
-
-    use windows::Foundation::IAsyncOperation;
-    use windows::Security::Credentials::UI::UserConsentVerificationResult;
+    use windows_future::IAsyncOperation;
 
     let interop: IUserConsentVerifierInterop =
         factory::<UserConsentVerifier, IUserConsentVerifierInterop>()?;
