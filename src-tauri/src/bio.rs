@@ -65,7 +65,9 @@ pub fn prompt(hwnd: isize, message: &str) -> Result<(), String> {
 
 #[cfg(windows)]
 fn hello_available() -> windows::core::Result<bool> {
-    use windows::Security::Credentials::UI::{UserConsentVerifier, UserConsentVerifierAvailability};
+    use windows::Security::Credentials::UI::{
+        UserConsentVerifier, UserConsentVerifierAvailability,
+    };
     let avail = UserConsentVerifier::CheckAvailabilityAsync()?.get()?;
     Ok(matches!(
         avail,
@@ -86,7 +88,9 @@ fn prompt_windows(hwnd: isize, message: &str) -> Result<(), String> {
         UserConsentVerificationResult::DeviceBusy => Err("指纹设备正忙".into()),
         UserConsentVerificationResult::DeviceNotPresent => Err("没有指纹或 Hello 设备".into()),
         UserConsentVerificationResult::DisabledByPolicy => Err("Windows Hello 被策略禁用".into()),
-        UserConsentVerificationResult::NotConfiguredForUser => Err("当前用户未配置 Windows Hello".into()),
+        UserConsentVerificationResult::NotConfiguredForUser => {
+            Err("当前用户未配置 Windows Hello".into())
+        }
         UserConsentVerificationResult::RetriesExhausted => Err("验证失败次数过多".into()),
         _ => Err("验证未通过".into()),
     }
@@ -129,4 +133,3 @@ fn verify_for_window(
         unsafe { interop.RequestVerificationForWindowAsync(target, msg)? };
     op.get()
 }
-use zeroize::Zeroize;

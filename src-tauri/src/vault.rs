@@ -128,7 +128,10 @@ impl Vault {
     }
 
     pub fn exists(&self) -> bool {
-        self.path.is_file() && fs::metadata(&self.path).map(|m| m.len() > 0).unwrap_or(false)
+        self.path.is_file()
+            && fs::metadata(&self.path)
+                .map(|m| m.len() > 0)
+                .unwrap_or(false)
     }
 
     pub fn unlocked(&self) -> bool {
@@ -207,7 +210,9 @@ impl Vault {
             let delay = (350u64 * 2u64.pow(self.fail.min(4))).min(4000);
             thread::sleep(Duration::from_millis(delay));
         }
-        let size = fs::metadata(&self.path).map_err(|_| "无法读取保险库")?.len();
+        let size = fs::metadata(&self.path)
+            .map_err(|_| "无法读取保险库")?
+            .len();
         if size > MAX_VAULT_BYTES {
             return Err("保险库文件过大".into());
         }
@@ -304,7 +309,11 @@ impl Vault {
         Ok(self.need()?.settings.clone())
     }
 
-    pub fn update_settings(&mut self, mut s: Settings, preserve_empty_password: bool) -> Result<(), String> {
+    pub fn update_settings(
+        &mut self,
+        mut s: Settings,
+        preserve_empty_password: bool,
+    ) -> Result<(), String> {
         let cur = self.need()?.settings.clone();
         if preserve_empty_password && s.webdav_password.is_empty() {
             s.webdav_password = cur.webdav_password;
@@ -443,7 +452,8 @@ impl Vault {
         if blob.len() as u64 > MAX_VAULT_BYTES {
             return Err("远程保险库过大".into());
         }
-        let mut plain = crypto::decrypt(blob, password).map_err(|_| "远程文件无法用当前密码解密")?;
+        let mut plain =
+            crypto::decrypt(blob, password).map_err(|_| "远程文件无法用当前密码解密")?;
         let payload = serde_json::from_slice(&plain).map_err(|_| "远程保险库损坏");
         plain.zeroize();
         let mut payload: Payload = payload?;
@@ -475,7 +485,10 @@ impl Vault {
         if !self.exists() {
             return Ok(());
         }
-        let parent = self.path.parent().ok_or_else(|| "保险库路径无效".to_string())?;
+        let parent = self
+            .path
+            .parent()
+            .ok_or_else(|| "保险库路径无效".to_string())?;
         let dir = parent.join("backups");
         fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         secure_directory(&dir)?;
@@ -539,7 +552,10 @@ impl SecureOpenOptions for OpenOptions {
 fn temporary_path(path: &Path) -> PathBuf {
     let mut random = [0u8; 8];
     rand::thread_rng().fill_bytes(&mut random);
-    let name = path.file_name().and_then(|x| x.to_str()).unwrap_or("vault.enc");
+    let name = path
+        .file_name()
+        .and_then(|x| x.to_str())
+        .unwrap_or("vault.enc");
     path.with_file_name(format!(".{name}.{}.tmp", hex::encode(random)))
 }
 
@@ -610,9 +626,14 @@ fn validate_payload(payload: &Payload) -> Result<(), String> {
         if account.id.is_empty()
             || !ids.insert(account.id.as_str())
             || account.secret.len() > MAX_SECRET_FIELD
-            || [&account.issuer, &account.name, &account.email, &account.notes]
-                .into_iter()
-                .any(|value| value.len() > MAX_TEXT_FIELD)
+            || [
+                &account.issuer,
+                &account.name,
+                &account.email,
+                &account.notes,
+            ]
+            .into_iter()
+            .any(|value| value.len() > MAX_TEXT_FIELD)
         {
             return Err("账号数据无效".into());
         }
@@ -647,7 +668,10 @@ fn atomic_replace(from: &Path, to: &Path) -> Result<(), String> {
 }
 
 fn now() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
 }
 
 fn new_id() -> String {

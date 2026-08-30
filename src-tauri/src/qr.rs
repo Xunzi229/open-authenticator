@@ -127,7 +127,10 @@ fn parse_migration(uri: &str) -> Result<Vec<QrAccount>, String> {
         } else if wire == 2 {
             let (len, p) = read_varint(&decoded, pos)?;
             pos = p;
-            let end = pos.checked_add(len).filter(|end| *end <= decoded.len()).ok_or("migration 数据损坏")?;
+            let end = pos
+                .checked_add(len)
+                .filter(|end| *end <= decoded.len())
+                .ok_or("migration 数据损坏")?;
             let value = &decoded[pos..end];
             pos = end;
             if field == 1 {
@@ -136,9 +139,15 @@ fn parse_migration(uri: &str) -> Result<Vec<QrAccount>, String> {
                 }
             }
         } else if wire == 1 {
-            pos = pos.checked_add(8).filter(|end| *end <= decoded.len()).ok_or("migration 数据损坏")?;
+            pos = pos
+                .checked_add(8)
+                .filter(|end| *end <= decoded.len())
+                .ok_or("migration 数据损坏")?;
         } else if wire == 5 {
-            pos = pos.checked_add(4).filter(|end| *end <= decoded.len()).ok_or("migration 数据损坏")?;
+            pos = pos
+                .checked_add(4)
+                .filter(|end| *end <= decoded.len())
+                .ok_or("migration 数据损坏")?;
         } else {
             return Err("migration 数据包含不支持的字段".into());
         }
@@ -180,7 +189,10 @@ fn parse_otp(data: &[u8]) -> Result<Option<QrAccount>, String> {
         } else if wire == 2 {
             let (len, p) = read_varint(data, pos)?;
             pos = p;
-            let end = pos.checked_add(len).filter(|end| *end <= data.len()).ok_or("migration 账号数据损坏")?;
+            let end = pos
+                .checked_add(len)
+                .filter(|end| *end <= data.len())
+                .ok_or("migration 账号数据损坏")?;
             let value = &data[pos..end];
             pos = end;
             match field {
@@ -190,9 +202,15 @@ fn parse_otp(data: &[u8]) -> Result<Option<QrAccount>, String> {
                 _ => {}
             }
         } else if wire == 1 {
-            pos = pos.checked_add(8).filter(|end| *end <= data.len()).ok_or("migration 账号数据损坏")?;
+            pos = pos
+                .checked_add(8)
+                .filter(|end| *end <= data.len())
+                .ok_or("migration 账号数据损坏")?;
         } else if wire == 5 {
-            pos = pos.checked_add(4).filter(|end| *end <= data.len()).ok_or("migration 账号数据损坏")?;
+            pos = pos
+                .checked_add(4)
+                .filter(|end| *end <= data.len())
+                .ok_or("migration 账号数据损坏")?;
         } else {
             return Err("migration 账号包含不支持的字段".into());
         }
@@ -558,9 +576,7 @@ mod tests {
 
     #[test]
     fn rejects_unknown_otpauth_algorithm_instead_of_silently_using_sha1() {
-        let result = parse_uri(
-            "otpauth://totp/Example:user?secret=JBSWY3DPEHPK3PXP&algorithm=MD5",
-        );
+        let result = parse_uri("otpauth://totp/Example:user?secret=JBSWY3DPEHPK3PXP&algorithm=MD5");
         assert_eq!(result.unwrap_err(), "不支持的验证码算法");
     }
 

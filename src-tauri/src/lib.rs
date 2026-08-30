@@ -5,8 +5,8 @@ mod totp;
 mod vault;
 mod webdav;
 
-use std::path::Path;
 use std::io::Write;
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
@@ -38,7 +38,10 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
     let show = MenuItem::with_id(app, "show", "显示窗口", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&show, &quit])?;
-    let icon = app.default_window_icon().cloned().expect("missing window icon");
+    let icon = app
+        .default_window_icon()
+        .cloned()
+        .expect("missing window icon");
     TrayIconBuilder::with_id("tray")
         .tooltip("验证器")
         .icon(icon)
@@ -131,14 +134,22 @@ fn status(state: State<AppState>) -> Result<Value, String> {
 fn setup(state: State<AppState>, password: String, confirm: String) -> Result<Value, String> {
     let password = Zeroizing::new(password);
     let confirm = Zeroizing::new(confirm);
-    state.vault.lock().map_err(|e| e.to_string())?.setup(&password, &confirm)?;
+    state
+        .vault
+        .lock()
+        .map_err(|e| e.to_string())?
+        .setup(&password, &confirm)?;
     ok(json!({}))
 }
 
 #[tauri::command]
 fn unlock(state: State<AppState>, password: String) -> Result<Value, String> {
     let password = Zeroizing::new(password);
-    state.vault.lock().map_err(|e| e.to_string())?.unlock(&password)?;
+    state
+        .vault
+        .lock()
+        .map_err(|e| e.to_string())?
+        .unlock(&password)?;
     ok(json!({}))
 }
 
@@ -169,15 +180,15 @@ fn snapshot(state: State<AppState>) -> Result<Value, String> {
         );
         remains.insert(a.id.clone(), json!(totp::remain(a.period)));
         pub_acc.push(json!({
-                "id": a.id,
-                "issuer": a.issuer,
-                "name": a.name,
-                "email": a.email,
-                "notes": a.notes,
-                "algorithm": a.algorithm,
-                "digits": a.digits,
-                "period": a.period
-            }));
+            "id": a.id,
+            "issuer": a.issuer,
+            "name": a.name,
+            "email": a.email,
+            "notes": a.notes,
+            "algorithm": a.algorithm,
+            "digits": a.digits,
+            "period": a.period
+        }));
     }
     ok(json!({
         "accounts": pub_acc,
@@ -231,7 +242,11 @@ fn account_from(v: Value) -> Account {
 
 #[tauri::command]
 fn add_account(state: State<AppState>, data: Value) -> Result<Value, String> {
-    let acc = state.vault.lock().map_err(|e| e.to_string())?.add(account_from(data))?;
+    let acc = state
+        .vault
+        .lock()
+        .map_err(|e| e.to_string())?
+        .add(account_from(data))?;
     ok(json!({ "id": acc.id }))
 }
 
@@ -269,7 +284,11 @@ fn import_uri(state: State<AppState>, uri: String) -> Result<Value, String> {
         return Err("导入内容过大".into());
     }
     let items = qr::parse_uri(&uri)?;
-    let count = state.vault.lock().map_err(|e| e.to_string())?.add_many(items)?;
+    let count = state
+        .vault
+        .lock()
+        .map_err(|e| e.to_string())?
+        .add_many(items)?;
     ok(json!({ "count": count }))
 }
 
@@ -287,7 +306,11 @@ fn import_qr(state: State<AppState>, image_b64: String) -> Result<Value, String>
         return Err("二维码图片不能超过 10 MiB".into());
     }
     let items = qr::decode_image(&bytes)?;
-    let count = state.vault.lock().map_err(|e| e.to_string())?.add_many(items)?;
+    let count = state
+        .vault
+        .lock()
+        .map_err(|e| e.to_string())?
+        .add_many(items)?;
     ok(json!({ "count": count }))
 }
 
@@ -308,7 +331,11 @@ fn import_text(state: State<AppState>, text: String) -> Result<Value, String> {
         return Err("导入文件不能超过 16 MiB".into());
     }
     let items = qr::parse_text(&text)?;
-    let count = state.vault.lock().map_err(|e| e.to_string())?.add_many(items)?;
+    let count = state
+        .vault
+        .lock()
+        .map_err(|e| e.to_string())?
+        .add_many(items)?;
     ok(json!({ "count": count }))
 }
 
@@ -338,7 +365,11 @@ fn export_data(
             })
         })
         .collect();
-    let txt = qrs.iter().map(qr::otpauth_uri).collect::<Vec<_>>().join("\n");
+    let txt = qrs
+        .iter()
+        .map(qr::otpauth_uri)
+        .collect::<Vec<_>>()
+        .join("\n");
     let migration_accounts: Vec<qr::QrAccount> = qrs
         .iter()
         .filter(|account| account.period == 30)
@@ -399,22 +430,37 @@ struct SettingsIn {
 fn save_settings(state: State<AppState>, data: SettingsIn) -> Result<Value, String> {
     let mut v = state.vault.lock().map_err(|e| e.to_string())?;
     let mut s = v.settings()?;
-    if let Some(x) = data.webdav_url { s.webdav_url = x; }
-    if let Some(x) = data.webdav_user { s.webdav_user = x; }
+    if let Some(x) = data.webdav_url {
+        s.webdav_url = x;
+    }
+    if let Some(x) = data.webdav_user {
+        s.webdav_user = x;
+    }
     if data.clear_webdav_password.unwrap_or(false) {
         s.webdav_password.clear();
     } else if let Some(x) = data.webdav_password {
         s.webdav_password = x;
     }
-    if let Some(x) = data.webdav_path { s.webdav_path = x; }
-    if let Some(x) = data.autolock_seconds { s.autolock_seconds = x; }
-    if let Some(x) = data.clipboard_clear_seconds { s.clipboard_clear_seconds = x; }
+    if let Some(x) = data.webdav_path {
+        s.webdav_path = x;
+    }
+    if let Some(x) = data.autolock_seconds {
+        s.autolock_seconds = x;
+    }
+    if let Some(x) = data.clipboard_clear_seconds {
+        s.clipboard_clear_seconds = x;
+    }
     v.update_settings(s, !data.clear_webdav_password.unwrap_or(false))?;
     ok(json!({}))
 }
 
 #[tauri::command]
-fn change_password(state: State<AppState>, old: String, new_password: String, confirm: String) -> Result<Value, String> {
+fn change_password(
+    state: State<AppState>,
+    old: String,
+    new_password: String,
+    confirm: String,
+) -> Result<Value, String> {
     let old = Zeroizing::new(old);
     let new_password = Zeroizing::new(new_password);
     let confirm = Zeroizing::new(confirm);
@@ -422,9 +468,15 @@ fn change_password(state: State<AppState>, old: String, new_password: String, co
     if old_bio.is_some() {
         bio::store(&new_password)?;
     }
-    if let Err(error) = state.vault.lock().map_err(|e| e.to_string())?.change_password(&old, &new_password, &confirm) {
+    if let Err(error) = state
+        .vault
+        .lock()
+        .map_err(|e| e.to_string())?
+        .change_password(&old, &new_password, &confirm)
+    {
         if let Some(password) = old_bio.as_deref() {
-            bio::store(password).map_err(|rollback| format!("{error}；恢复系统凭据失败：{rollback}"))?;
+            bio::store(password)
+                .map_err(|rollback| format!("{error}；恢复系统凭据失败：{rollback}"))?;
         }
         if let Some(password) = old_bio.as_mut() {
             password.zeroize();
@@ -449,7 +501,10 @@ fn save_text(name: String, content: String) -> Result<Value, String> {
     let dir = dirs::download_dir().ok_or_else(|| "找不到下载文件夹".to_string())?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let source = Path::new(file.as_ref());
-    let stem = source.file_stem().and_then(|value| value.to_str()).unwrap_or("authenticator");
+    let stem = source
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("authenticator");
     let extension = source.extension().and_then(|value| value.to_str());
     let mut saved = None;
     for index in 0..1000 {
@@ -461,9 +516,15 @@ fn save_text(name: String, content: String) -> Result<Value, String> {
             format!("{stem} ({index})")
         };
         let path = dir.join(candidate);
-        match std::fs::OpenOptions::new().create_new(true).write(true).open(&path) {
+        match std::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&path)
+        {
             Ok(mut output) => {
-                output.write_all(content.as_bytes()).map_err(|e| e.to_string())?;
+                output
+                    .write_all(content.as_bytes())
+                    .map_err(|e| e.to_string())?;
                 output.sync_all().map_err(|e| e.to_string())?;
                 saved = Some(path);
                 break;
@@ -495,7 +556,11 @@ async fn webdav_upload(state: State<'_, AppState>) -> Result<Value, String> {
     })
     .await
     .map_err(|e| e.to_string())??;
-    state.vault.lock().map_err(|e| e.to_string())?.set_webdav_etag(etag)?;
+    state
+        .vault
+        .lock()
+        .map_err(|e| e.to_string())?
+        .set_webdav_etag(etag)?;
     ok(json!({}))
 }
 
@@ -512,7 +577,12 @@ async fn webdav_download(state: State<'_, AppState>, password: String) -> Result
         (s, pw)
     };
     let download = tauri::async_runtime::spawn_blocking(move || {
-        webdav::get(&s.webdav_url, &s.webdav_path, &s.webdav_user, &s.webdav_password)
+        webdav::get(
+            &s.webdav_url,
+            &s.webdav_path,
+            &s.webdav_user,
+            &s.webdav_password,
+        )
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -533,7 +603,11 @@ fn bio_status() -> Result<Value, String> {
 }
 
 #[tauri::command]
-fn bio_enable(window: WebviewWindow, state: State<AppState>, password: String) -> Result<Value, String> {
+fn bio_enable(
+    window: WebviewWindow,
+    state: State<AppState>,
+    password: String,
+) -> Result<Value, String> {
     let password = Zeroizing::new(password);
     {
         let mut v = state.vault.lock().map_err(|e| e.to_string())?;
@@ -588,10 +662,30 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
-            status, setup, unlock, lock, activity, snapshot, get_account, add_account, update_account,
-            delete_account, import_uri, import_qr, import_text, export_data, account_qr,
-            save_settings, change_password, webdav_upload, webdav_download, save_text,
-            bio_status, bio_enable, bio_disable, unlock_bio
+            status,
+            setup,
+            unlock,
+            lock,
+            activity,
+            snapshot,
+            get_account,
+            add_account,
+            update_account,
+            delete_account,
+            import_uri,
+            import_qr,
+            import_text,
+            export_data,
+            account_qr,
+            save_settings,
+            change_password,
+            webdav_upload,
+            webdav_download,
+            save_text,
+            bio_status,
+            bio_enable,
+            bio_disable,
+            unlock_bio
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

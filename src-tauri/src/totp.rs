@@ -6,7 +6,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use zeroize::Zeroize;
 
 fn now_secs() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
 }
 
 pub fn normalize_secret(secret: &str) -> Result<String, String> {
@@ -22,7 +25,9 @@ pub fn normalize_secret(secret: &str) -> Result<String, String> {
         || !cleaned
             .chars()
             .all(|c| c.is_ascii_uppercase() || ('2'..='7').contains(&c))
-        || BASE32_NOPAD.decode(cleaned.as_bytes()).map_or(true, |v| v.is_empty())
+        || BASE32_NOPAD
+            .decode(cleaned.as_bytes())
+            .map_or(true, |v| v.is_empty())
     {
         return Err("密钥不是有效的 Base32".into());
     }
@@ -123,9 +128,8 @@ mod tests {
     fn matches_rfc_6238_vectors() {
         let sha1 = BASE32_NOPAD.encode(b"12345678901234567890");
         let sha256 = BASE32_NOPAD.encode(b"12345678901234567890123456789012");
-        let sha512 = BASE32_NOPAD.encode(
-            b"1234567890123456789012345678901234567890123456789012345678901234",
-        );
+        let sha512 = BASE32_NOPAD
+            .encode(b"1234567890123456789012345678901234567890123456789012345678901234");
         assert_eq!(totp_at(&sha1, 8, "SHA1", 30, 59).unwrap(), "94287082");
         assert_eq!(totp_at(&sha256, 8, "SHA256", 30, 59).unwrap(), "46119246");
         assert_eq!(totp_at(&sha512, 8, "SHA512", 30, 59).unwrap(), "90693936");

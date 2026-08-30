@@ -24,7 +24,13 @@ pub enum CryptoError {
     Auth,
 }
 
-fn derive(password: &str, salt: &[u8], time: u32, memory: u32, para: u32) -> Result<[u8; 32], CryptoError> {
+fn derive(
+    password: &str,
+    salt: &[u8],
+    time: u32,
+    memory: u32,
+    para: u32,
+) -> Result<[u8; 32], CryptoError> {
     if !(MIN_MEMORY_KIB..=MAX_MEMORY_KIB).contains(&memory)
         || !(1..=MAX_TIME_COST).contains(&time)
         || !(1..=MAX_PARALLELISM).contains(&para)
@@ -103,6 +109,9 @@ mod tests {
     fn rejects_untrusted_expensive_kdf_parameters() {
         let mut blob = encrypt(b"payload", "correct horse").unwrap();
         blob[20..24].copy_from_slice(&u32::MAX.to_be_bytes());
-        assert!(matches!(decrypt(&blob, "correct horse"), Err(CryptoError::Corrupted)));
+        assert!(matches!(
+            decrypt(&blob, "correct horse"),
+            Err(CryptoError::Corrupted)
+        ));
     }
 }

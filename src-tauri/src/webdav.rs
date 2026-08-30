@@ -105,7 +105,9 @@ fn ensure_collections(
     }
     let mut current = base.clone();
     for part in &parts[..parts.len() - 1] {
-        current = current.join(&format!("{part}/")).map_err(|_| "WebDAV 路径无效")?;
+        current = current
+            .join(&format!("{part}/"))
+            .map_err(|_| "WebDAV 路径无效")?;
         let method = reqwest::Method::from_bytes(b"MKCOL").map_err(|e| e.to_string())?;
         let resp = auth(client.request(method, current.clone()), user, pass)
             .send()
@@ -136,7 +138,11 @@ pub fn put(
             .put(dest.clone())
             .header("Content-Type", "application/octet-stream")
             .header(
-                if expected_etag.is_some() { IF_MATCH } else { IF_NONE_MATCH },
+                if expected_etag.is_some() {
+                    IF_MATCH
+                } else {
+                    IF_NONE_MATCH
+                },
                 expected_etag.unwrap_or("*"),
             )
             .body(data.to_vec()),
@@ -147,10 +153,7 @@ pub fn put(
     if !matches!(resp.status().as_u16(), 200 | 201 | 204 | 207) {
         return Err(fail("WebDAV 上传", resp.status()));
     }
-    response_etag(&resp).map_or_else(
-        || fetch_etag(&client, &dest, user, pass),
-        Ok,
-    )
+    response_etag(&resp).map_or_else(|| fetch_etag(&client, &dest, user, pass), Ok)
 }
 
 pub fn get(base: &str, path: &str, user: &str, pass: &str) -> Result<Download, String> {
@@ -171,8 +174,8 @@ pub fn get(base: &str, path: &str, user: &str, pass: &str) -> Result<Download, S
     {
         return Err("远程保险库超过 16 MiB 限制".into());
     }
-    let etag = response_etag(&resp)
-        .ok_or_else(|| "WebDAV 服务器未提供 ETag，无法安全同步".to_string())?;
+    let etag =
+        response_etag(&resp).ok_or_else(|| "WebDAV 服务器未提供 ETag，无法安全同步".to_string())?;
     let mut bytes = Vec::new();
     resp.by_ref()
         .take(MAX_REMOTE_BYTES + 1)

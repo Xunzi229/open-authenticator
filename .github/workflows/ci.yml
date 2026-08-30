@@ -39,18 +39,6 @@ jobs:
         with:
           workspaces: src-tauri -> target
 
-      - run: cargo generate-lockfile --manifest-path src-tauri/Cargo.toml
-      - run: cargo fmt --manifest-path src-tauri/Cargo.toml
-
-      - uses: actions/upload-artifact@v7
-        if: runner.os == 'Windows'
-        with:
-          name: generated-rust
-          path: |
-            src-tauri/Cargo.lock
-            src-tauri/src/*.rs
-          retention-days: 1
-
       - run: npm ci
       - run: npm run build
       - run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
