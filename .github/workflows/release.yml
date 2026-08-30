@@ -43,6 +43,7 @@ jobs:
       - run: npx tauri icon src-tauri/icons/icon.png
 
       - uses: tauri-apps/tauri-action@v0
+        id: tauri
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
@@ -52,3 +53,21 @@ jobs:
           releaseDraft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
           args: ${{ matrix.args }}
+          assetNamePattern: "[name]_[version]_[platform]_[arch][setup][ext]"
+
+      - name: Windows portable
+        if: matrix.platform == 'windows-latest'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.tauri.outputs.appVersion }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          $exe = "src-tauri/target/release/authenticator.exe"
+          if (-not (Test-Path $exe)) { $exe = "src-tauri/target/release/Authenticator.exe" }
+          if (-not (Test-Path $exe)) { throw "portable exe not found" }
+          New-Item -ItemType Directory -Force portable | Out-Null
+          Copy-Item $exe portable/Authenticator.exe -Force
+          $zip = "Authenticator_$($env:VERSION)_windows_x64_portable.zip"
+          if (Test-Path $zip) { Remove-Item $zip }
+          Compress-Archive -Path portable/Authenticator.exe -DestinationPath $zip
+          gh release upload $env:TAG $zip --clobber

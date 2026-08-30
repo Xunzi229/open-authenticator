@@ -109,6 +109,10 @@ async function copyCode(id, btn) {
 function closeModal() {
   $('modal').classList.add('hidden')
   $('sheet').innerHTML = ''
+  if (window._pasteQr) {
+    document.removeEventListener('paste', window._pasteQr)
+    window._pasteQr = null
+  }
 }
 function openModal(html) {
   $('sheet').innerHTML = html
@@ -161,9 +165,10 @@ function openEditor(acc) {
 function openImport() {
   openModal(`
     <h2>导入二维码</h2>
-    <div class="drop" id="drop">把二维码图片拖到这里，或点击选择</div>
+    <p class="hint">支持 Google 验证器「转移账号」二维码，以及普通 otpauth 链接。可一次导入多个账号。</p>
+    <div class="drop" id="drop">把二维码图片拖到这里，点击选择，或直接粘贴截图</div>
     <input id="file" type="file" accept="image/*" hidden />
-    <label>也可以粘贴 otpauth 链接<input id="uri" spellcheck="false" placeholder="otpauth://totp/..." /></label>
+    <label>也可以粘贴链接<input id="uri" spellcheck="false" placeholder="otpauth-migration:// 或 otpauth://totp/..." /></label>
     <p class="err" id="form-err"></p>
     <div class="row-btns">
       <button type="button" class="ghost" data-close>取消</button>
@@ -181,6 +186,16 @@ function openImport() {
     if (e.dataTransfer.files[0]) readQr(e.dataTransfer.files[0])
   })
   file.onchange = () => { if (file.files[0]) readQr(file.files[0]) }
+  if (window._pasteQr) document.removeEventListener('paste', window._pasteQr)
+  window._pasteQr = (e) => {
+    if ($('modal').classList.contains('hidden')) return
+    const item = [...(e.clipboardData?.items || [])].find((i) => i.type.startsWith('image/'))
+    if (item) {
+      e.preventDefault()
+      readQr(item.getAsFile())
+    }
+  }
+  document.addEventListener('paste', window._pasteQr)
   $('btn-uri').onclick = async () => {
     try {
       const res = await call('import_uri', { uri: $('uri').value })
