@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>验证器</title>
+  <link rel="stylesheet" href="/src/styles.css" />
+</head>
+<body>
+  <section id="gate" class="screen">
+    <div class="card">
+      <div class="logo">验证器</div>
+      <p class="sub" id="gate-sub">主密码解锁</p>
+      <form id="gate-form">
+        <label class="setup-only">新主密码
+          <input id="pw1" type="password" autocomplete="new-password" spellcheck="false" />
+        </label>
+        <label id="pw2-wrap">确认密码 / 主密码
+          <input id="pw2" type="password" autocomplete="current-password" spellcheck="false" />
+        </label>
+        <p class="err" id="gate-err"></p>
+        <button type="submit" id="gate-btn">解锁</button>
+      </form>
+    </div>
+  </section>
+  <section id="app" class="screen hidden">
+    <header class="head">
+      <div class="title">验证码<small>点账号复制 · 点验证码显示</small></div>
+      <div class="ring" id="ring">
+        <svg viewBox="0 0 36 36">
+          <circle class="track" cx="18" cy="18" r="15.5"></circle>
+          <circle class="prog" cx="18" cy="18" r="15.5"></circle>
+        </svg>
+        <span class="num" id="remain">--</span>
+      </div>
+      <button type="button" class="icon-btn" id="btn-lock">锁定</button>
+    </header>
+    <div class="toolbar">
+      <input id="q" type="search" placeholder="搜索" />
+      <button type="button" class="icon-btn" id="btn-add">+</button>
+      <button type="button" class="icon-btn" id="btn-qr">QR</button>
+      <button type="button" class="icon-btn" id="btn-set">设</button>
+    </div>
+    <div class="list" id="list"></div>
+  </section>
+  <div id="modal" class="modal hidden"><div class="sheet" id="sheet"></div></div>
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>

@@ -1,0 +1,394 @@
+use rand::RngCore;
+use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::thread;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+use crate::crypto;
+use crate::qr::QrAccount;
+
+pub const MIN_PASSWORD: usize = 8;
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Account {
+    pub id: String,
+    pub issuer: String,
+    pub name: String,
+    pub email: String,
+    pub notes: String,
+    pub secret: String,
+    pub algorithm: String,
+    pub digits: u32,
+    pub period: u64,
+    pub created: u64,
+    pub updated: u64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Settings {
+    #[serde(default)]
+    pub webdav_url: String,
+    #[serde(default)]
+    pub webdav_user: String,
+    #[serde(default)]
+    pub webdav_password: String,
+    #[serde(default = "default_dav_path")]
+    pub webdav_path: String,
+    #[serde(default = "default_autolock")]
+    pub autolock_seconds: u64,
+    #[serde(default = "default_clip")]
+    pub clipboard_clear_seconds: u64,
+}
+
+fn default_dav_path() -> String {
+    "/authenticator/vault.enc".into()
+}
+fn default_autolock() -> u64 {
+    180
+}
+fn default_clip() -> u64 {
+    30
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            webdav_url: String::new(),
+            webdav_user: String::new(),
+            webdav_password: String::new(),
+            webdav_path: default_dav_path(),
+            autolock_seconds: default_autolock(),
+            clipboard_clear_seconds: default_clip(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Payload {
+    pub version: u32,
+    pub accounts: Vec<Account>,
+    #[serde(default)]
+    pub settings: Settings,
+}
+
+pub struct Vault {
+    path: PathBuf,
+    password: Option<String>,
+    payload: Option<Payload>,
+    fail: u32,
+    last_active: Option<Instant>,
+}
+
+impl Vault {
+    pub fn new(path: PathBuf) -> Self {
+        Self {
+            path,
+            password: None,
+            payload: None,
+            fail: 0,
+            last_active: None,
+        }
+    }
+
+    pub fn default_path() -> PathBuf {
+        if cfg!(windows) {
+            let base = std::env::var("APPDATA").unwrap_or_else(|_| {
+                dirs::home_dir()
+                    .unwrap_or_else(|| PathBuf::from("."))
+                    .join("AppData")
+                    .join("Roaming")
+                    .to_string_lossy()
+                    .into()
+            });
+            PathBuf::from(base).join("Authenticator").join("vault.enc")
+        } else if cfg!(target_os = "macos") {
+            dirs::home_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join("Library/Application Support/Authenticator/vault.enc")
+        } else {
+            dirs::data_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join("authenticator/vault.enc")
+        }
+    }
+
+    pub fn exists(&self) -> bool {
+        self.path.is_file() && fs::metadata(&self.path).map(|m| m.len() > 0).unwrap_or(false)
+    }
+
+    pub fn unlocked(&self) -> bool {
+        self.payload.is_some() && self.password.is_some()
+    }
+
+    pub fn lock(&mut self) {
+        self.password = None;
+        self.payload = None;
+        self.last_active = None;
+    }
+
+    fn touch(&mut self) {
+        self.last_active = Some(Instant::now());
+    }
+
+    fn need(&mut self) -> Result<&mut Payload, String> {
+        if self.payload.is_none() || self.password.is_none() {
+            return Err("已锁定".into());
+        }
+        let idle = self
+            .payload
+            .as_ref()
+            .map(|p| p.settings.autolock_seconds)
+            .unwrap_or(0);
+        if idle > 0 {
+            if let Some(t) = self.last_active {
+                if t.elapsed() > Duration::from_secs(idle) {
+                    self.lock();
+                    return Err("已自动锁定".into());
+                }
+            }
+        }
+        self.touch();
+        self.payload.as_mut().ok_or_else(|| "已锁定".into())
+    }
+
+    pub fn setup(&mut self, password: &str, confirm: &str) -> Result<(), String> {
+        if self.exists() {
+            return Err("保险库已存在".into());
+        }
+        if password != confirm {
+            return Err("两次密码不一致".into());
+        }
+        if password.len() < MIN_PASSWORD {
+            return Err("密码至少 8 位".into());
+        }
+        self.password = Some(password.to_string());
+        self.payload = Some(Payload {
+            version: 1,
+            accounts: vec![],
+            settings: Settings::default(),
+        });
+        self.touch();
+        self.save()
+    }
+
+    pub fn unlock(&mut self, password: &str) -> Result<(), String> {
+        if !self.exists() {
+            return Err("还没有保险库".into());
+        }
+        if self.fail > 0 {
+            let delay = (350u64 * 2u64.pow(self.fail.min(4))).min(4000);
+            thread::sleep(Duration::from_millis(delay));
+        }
+        let raw = fs::read(&self.path).map_err(|_| "无法读取保险库")?;
+        let plain = match crypto::decrypt(&raw, password) {
+            Ok(p) => p,
+            Err(_) => {
+                self.fail += 1;
+                return Err("密码错误".into());
+            }
+        };
+        let payload: Payload = serde_json::from_slice(&plain).map_err(|_| "保险库损坏")?;
+        self.fail = 0;
+        self.password = Some(password.to_string());
+        self.payload = Some(payload);
+        self.touch();
+        Ok(())
+    }
+
+    pub fn save(&mut self) -> Result<(), String> {
+        let password = self.password.clone().ok_or("已锁定")?;
+        let payload = self.payload.as_ref().ok_or("已锁定")?;
+        let plain = serde_json::to_vec(payload).map_err(|e| e.to_string())?;
+        let blob = crypto::encrypt(&plain, &password).map_err(|e| e.to_string())?;
+        if let Some(dir) = self.path.parent() {
+            fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        }
+        let tmp = self.path.with_extension("enc.tmp");
+        fs::write(&tmp, &blob).map_err(|e| e.to_string())?;
+        fs::rename(&tmp, &self.path).map_err(|e| e.to_string())?;
+        self.touch();
+        Ok(())
+    }
+
+    pub fn change_password(&mut self, old: &str, new: &str, confirm: &str) -> Result<(), String> {
+        self.need()?;
+        if self.password.as_deref() != Some(old) {
+            return Err("当前密码错误".into());
+        }
+        if new != confirm {
+            return Err("两次密码不一致".into());
+        }
+        if new.len() < MIN_PASSWORD {
+            return Err("密码至少 8 位".into());
+        }
+        self.password = Some(new.to_string());
+        self.save()
+    }
+
+    pub fn settings(&mut self) -> Result<Settings, String> {
+        Ok(self.need()?.settings.clone())
+    }
+
+    pub fn update_settings(&mut self, mut s: Settings) -> Result<(), String> {
+        let cur = self.need()?.settings.clone();
+        if s.webdav_password.is_empty() {
+            s.webdav_password = cur.webdav_password;
+        }
+        if s.webdav_path.is_empty() {
+            s.webdav_path = default_dav_path();
+        }
+        self.need()?.settings = s;
+        self.save()
+    }
+
+    pub fn accounts(&mut self) -> Result<Vec<Account>, String> {
+        Ok(self.need()?.accounts.clone())
+    }
+
+    pub fn get(&mut self, id: &str) -> Result<Account, String> {
+        self.need()?
+            .accounts
+            .iter()
+            .find(|a| a.id == id)
+            .cloned()
+            .ok_or_else(|| "账号不存在".into())
+    }
+
+    pub fn add(&mut self, mut a: Account) -> Result<Account, String> {
+        normalize(&mut a)?;
+        self.need()?.accounts.push(a.clone());
+        self.save()?;
+        Ok(a)
+    }
+
+    pub fn add_many(&mut self, items: Vec<QrAccount>) -> Result<usize, String> {
+        let mut added = Vec::new();
+        for it in items {
+            let mut a = Account {
+                id: String::new(),
+                issuer: it.issuer,
+                name: it.name,
+                email: String::new(),
+                notes: String::new(),
+                secret: it.secret,
+                algorithm: it.algorithm,
+                digits: it.digits,
+                period: it.period,
+                created: 0,
+                updated: 0,
+            };
+            normalize(&mut a)?;
+            added.push(a);
+        }
+        let n = added.len();
+        self.need()?.accounts.extend(added);
+        self.save()?;
+        Ok(n)
+    }
+
+    pub fn update(&mut self, id: &str, patch: Account) -> Result<(), String> {
+        let mut cur = self.get(id)?;
+        cur.issuer = patch.issuer;
+        cur.name = patch.name;
+        cur.email = patch.email;
+        cur.notes = patch.notes;
+        if !patch.algorithm.is_empty() {
+            cur.algorithm = patch.algorithm;
+        }
+        if patch.digits != 0 {
+            cur.digits = patch.digits;
+        }
+        if patch.period != 0 {
+            cur.period = patch.period;
+        }
+        if !patch.secret.trim().is_empty() {
+            cur.secret = patch.secret;
+        }
+        normalize(&mut cur)?;
+        cur.id = id.to_string();
+        {
+            let list = &mut self.need()?.accounts;
+            if let Some(slot) = list.iter_mut().find(|a| a.id == id) {
+                *slot = cur;
+            }
+        }
+        self.save()
+    }
+
+    pub fn delete(&mut self, id: &str) -> Result<(), String> {
+        let n = {
+            let list = &mut self.need()?.accounts;
+            let before = list.len();
+            list.retain(|a| a.id != id);
+            before - list.len()
+        };
+        if n == 0 {
+            return Err("账号不存在".into());
+        }
+        self.save()
+    }
+
+    pub fn encrypted_bytes(&self) -> Result<Vec<u8>, String> {
+        fs::read(&self.path).map_err(|_| "没有本地保险库".into())
+    }
+
+    pub fn replace_bytes(&mut self, blob: &[u8], password: &str) -> Result<(), String> {
+        let plain = crypto::decrypt(blob, password).map_err(|_| "远程文件无法用当前密码解密")?;
+        let payload: Payload = serde_json::from_slice(&plain).map_err(|_| "远程保险库损坏")?;
+        self.password = Some(password.to_string());
+        self.payload = Some(payload);
+        self.touch();
+        self.save()
+    }
+
+    pub fn password(&self) -> Option<String> {
+        self.password.clone()
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+fn now() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
+}
+
+fn new_id() -> String {
+    let mut b = [0u8; 16];
+    rand::thread_rng().fill_bytes(&mut b);
+    hex::encode(b)
+}
+
+fn normalize(a: &mut Account) -> Result<(), String> {
+    a.secret = a.secret.replace(' ', "").to_ascii_uppercase();
+    a.issuer = a.issuer.trim().to_string();
+    a.name = a.name.trim().to_string();
+    a.email = a.email.trim().to_string();
+    a.notes = a.notes.trim().to_string();
+    if a.secret.is_empty() {
+        return Err("缺少密钥".into());
+    }
+    if a.name.is_empty() && a.issuer.is_empty() {
+        return Err("请填写名称或发行方".into());
+    }
+    if a.algorithm.is_empty() {
+        a.algorithm = "SHA1".into();
+    }
+    if a.digits == 0 {
+        a.digits = 6;
+    }
+    if a.period == 0 {
+        a.period = 30;
+    }
+    let t = now();
+    if a.id.is_empty() {
+        a.id = new_id();
+    }
+    if a.created == 0 {
+        a.created = t;
+    }
+    a.updated = t;
+    Ok(())
+}
