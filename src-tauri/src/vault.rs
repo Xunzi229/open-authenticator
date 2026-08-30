@@ -514,7 +514,6 @@ impl Vault {
         self.fail = 0;
         Ok(())
     }
-
 }
 
 impl Drop for Vault {
