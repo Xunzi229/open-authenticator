@@ -235,14 +235,6 @@ impl Vault {
         Ok(())
     }
 
-    pub fn save(&mut self) -> Result<(), String> {
-        let password = self.password.as_deref().ok_or("已锁定")?;
-        let payload = self.payload.as_ref().ok_or("已锁定")?;
-        self.write_payload(payload, password)?;
-        self.touch();
-        Ok(())
-    }
-
     fn write_payload(&self, payload: &Payload, password: &str) -> Result<(), String> {
         let mut plain = serde_json::to_vec(payload).map_err(|e| e.to_string())?;
         if plain.len() as u64 > MAX_VAULT_BYTES {
@@ -523,9 +515,6 @@ impl Vault {
         Ok(())
     }
 
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
 }
 
 impl Drop for Vault {

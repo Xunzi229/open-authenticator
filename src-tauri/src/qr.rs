@@ -379,7 +379,7 @@ fn secret_bytes(secret: &str) -> Result<Vec<u8>, String> {
         }
     }
     let mut padded = cleaned;
-    while padded.len() % 8 != 0 {
+    while !padded.len().is_multiple_of(8) {
         padded.push('=');
     }
     data_encoding::BASE32
