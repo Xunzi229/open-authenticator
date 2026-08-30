@@ -10,6 +10,8 @@ let timer = null
 let clipTimer = null
 let isSetup = false
 let lastActivity = 0
+let promptDismiss = null
+let promptReturnFocus = null
 
 function invoke(name, args) {
   return window.__TAURI__.core.invoke(name, args)
@@ -129,17 +131,43 @@ async function copyCode(id, btn) {
 }
 
 function closePrompt() {
+  const returnFocus = promptReturnFocus
+  promptDismiss = null
+  promptReturnFocus = null
   $('prompt').classList.add('hidden')
+  $('prompt').removeAttribute('aria-labelledby')
   $('prompt-sheet').innerHTML = ''
   $('prompt').onclick = null
+  if (returnFocus?.isConnected) returnFocus.focus()
 }
-function openPrompt(html) {
+function dismissPrompt() {
+  if (promptDismiss) {
+    const dismiss = promptDismiss
+    promptDismiss = null
+    dismiss()
+  } else {
+    closePrompt()
+  }
+}
+function openPrompt(html, onDismiss = null) {
+  promptReturnFocus = document.activeElement
+  promptDismiss = onDismiss
   $('prompt-sheet').innerHTML = html
+  const heading = $('prompt-sheet').querySelector('h2')
+  if (heading) {
+    heading.id = 'prompt-title'
+    $('prompt').setAttribute('aria-labelledby', heading.id)
+  }
   $('prompt').classList.remove('hidden')
+  requestAnimationFrame(() => {
+    $('prompt-sheet').querySelector('[autofocus], button, input, textarea, select')?.focus()
+  })
 }
 function closeModal() {
-  closePrompt()
+  if ($('prompt').classList.contains('hidden')) closePrompt()
+  else dismissPrompt()
   $('modal').classList.add('hidden')
+  $('modal').removeAttribute('aria-labelledby')
   $('sheet').innerHTML = ''
   state.export = null
   if (window._pasteQr) {
@@ -150,11 +178,22 @@ function closeModal() {
 function openModal(html) {
   closePrompt()
   $('sheet').innerHTML = html
+  const heading = $('sheet').querySelector('h2')
+  if (heading) {
+    heading.id = 'modal-title'
+    $('modal').setAttribute('aria-labelledby', heading.id)
+  }
   $('modal').classList.remove('hidden')
 }
 function askAuth(hint, run) {
   return new Promise((resolve) => {
     let done = false
+    const finish = (value) => {
+      if (done) return
+      done = true
+      closePrompt()
+      resolve(value)
+    }
     openPrompt(`
       <h2>验证身份</h2>
       <p class="hint">${esc(hint)}</p>
@@ -165,15 +204,9 @@ function askAuth(hint, run) {
         ${bio.enabled ? '<button type="button" class="ghost" id="auth-bio">指纹验证</button>' : ''}
         <button type="button" class="primary" id="auth-ok">验证</button>
       </div>
-    `)
-    const finish = (value) => {
-      if (done) return
-      done = true
-      closePrompt()
-      resolve(value)
-    }
+    `, () => finish(null))
     $('auth-cancel').onclick = () => finish(null)
-    $('prompt').onclick = (e) => { if (e.target.id === 'prompt') finish(null) }
+    $('prompt').onclick = (e) => { if (e.target.id === 'prompt') dismissPrompt() }
     const go = async (biometric) => {
       if (done) return
       const pw = biometric ? '' : ($('prompt-sheet').querySelector('[name="auth-pw"]')?.value || '')
@@ -203,9 +236,41 @@ function showAccountQr(svg) {
     <p class="hint">可供其他验证器扫描</p>
     <div class="qr-box">${svg}</div>
     <div class="row-btns"><button type="button" class="ghost" id="qr-done">关闭</button></div>
-  `)
+  `, closePrompt)
   $('qr-done').onclick = closePrompt
-  $('prompt').onclick = (e) => { if (e.target.id === 'prompt') closePrompt() }
+  $('prompt').onclick = (e) => { if (e.target.id === 'prompt') dismissPrompt() }
+}
+
+function appDialog({ title, message, confirmLabel = '确定', cancelLabel = '', tone = 'default' }) {
+  return new Promise((resolve) => {
+    let done = false
+    const finish = (value) => {
+      if (done) return
+      done = true
+      closePrompt()
+      resolve(value)
+    }
+    const icon = tone === 'warning'
+      ? '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 9v4m0 4h.01M10.3 4.2 2.6 17.5A2 2 0 0 0 4.3 20h15.4a2 2 0 0 0 1.7-2.5L13.7 4.2a2 2 0 0 0-3.4 0Z"/></svg>'
+      : '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg>'
+    openPrompt(`
+      <div class="dialog-head">
+        <div class="dialog-icon ${tone}">${icon}</div>
+        <div class="dialog-copy">
+          <h2>${esc(title)}</h2>
+          <p>${esc(message)}</p>
+        </div>
+      </div>
+      <div class="row-btns dialog-actions">
+        ${cancelLabel ? `<button type="button" class="ghost" id="dialog-cancel">${esc(cancelLabel)}</button>` : ''}
+        <button type="button" class="${tone === 'warning' ? 'danger-solid' : 'primary'}" id="dialog-confirm" autofocus>${esc(confirmLabel)}</button>
+      </div>
+    `, () => finish(false))
+    const cancel = $('dialog-cancel')
+    if (cancel) cancel.onclick = () => finish(false)
+    $('dialog-confirm').onclick = () => finish(true)
+    $('prompt').onclick = (e) => { if (e.target.id === 'prompt') dismissPrompt() }
+  })
 }
 function field(name, label, value, extra = '') {
   return `<label>${label}<input name="${name}" value="${esc(value || '')}" ${extra} /></label>`
@@ -394,7 +459,12 @@ function showPane(name) {
 }
 
 function imported(count) {
-  alert(count ? '已导入 ' + count + ' 个账号' : '没有新账号，重复项已跳过')
+  return appDialog({
+    title: count ? '导入完成' : '没有新增账号',
+    message: count ? `已安全导入 ${count} 个账号。` : '导入内容中的账号均已存在，重复项已跳过。',
+    confirmLabel: '完成',
+    tone: 'success',
+  })
 }
 
 function openTransfer() {
@@ -587,11 +657,20 @@ function renderSettings(s) {
     }
   }
   $('btn-up').onclick = () => runDav($('btn-up'), '正在上传…', () => call('webdav_upload'), '已上传加密保险库')
-  $('btn-down').onclick = () => runDav($('btn-down'), '正在拉取…', async () => {
-    if (!window.confirm('拉取会用远程保险库替换本地数据，并自动创建本地加密备份。确定继续？')) throw new Error('已取消拉取')
-    await call('webdav_download', { password: val('remote_vault_password') })
-    await refresh()
-  }, '已从远程覆盖本地')
+  $('btn-down').onclick = async () => {
+    const confirmed = await appDialog({
+      title: '使用远程保险库？',
+      message: '远程数据将替换当前本地数据。替换前会自动创建一份本地加密备份。',
+      confirmLabel: '拉取并替换',
+      cancelLabel: '取消',
+      tone: 'warning',
+    })
+    if (!confirmed) return
+    await runDav($('btn-down'), '正在拉取…', async () => {
+      await call('webdav_download', { password: val('remote_vault_password') })
+      await refresh()
+    }, '已从远程覆盖本地')
+  }
   $('btn-pw').onclick = async () => {
     try { await call('change_password', { old: val('old'), newPassword: val('newpw'), confirm: val('new2') }); $('form-err').textContent = '主密码已更新' }
     catch (e) { $('form-err').textContent = e.message }
@@ -694,6 +773,30 @@ async function reportActivity() {
 }
 document.addEventListener('pointerdown', reportActivity, { passive: true })
 document.addEventListener('keydown', reportActivity)
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    if (!$('prompt').classList.contains('hidden')) {
+      e.preventDefault()
+      dismissPrompt()
+    } else if (!$('modal').classList.contains('hidden')) {
+      e.preventDefault()
+      closeModal()
+    }
+    return
+  }
+  if (e.key !== 'Tab' || $('prompt').classList.contains('hidden')) return
+  const focusable = [...$('prompt-sheet').querySelectorAll('button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), [tabindex]:not([tabindex="-1"])')]
+  if (!focusable.length) return
+  const first = focusable[0]
+  const last = focusable[focusable.length - 1]
+  if (e.shiftKey && document.activeElement === first) {
+    e.preventDefault()
+    last.focus()
+  } else if (!e.shiftKey && document.activeElement === last) {
+    e.preventDefault()
+    first.focus()
+  }
+})
 document.addEventListener('wheel', reportActivity, { passive: true })
 document.addEventListener('touchmove', reportActivity, { passive: true })
 $('modal').addEventListener('click', (e) => {

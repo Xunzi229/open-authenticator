@@ -231,6 +231,56 @@ button:disabled { opacity: .5; cursor: default; }
 .sheet .block .err, .sheet .block .hint { margin: 8px 0 0; }
 .sheet-actions { margin: 0; }
 .modal.front { z-index: 40; }
+.front .sheet {
+  width: min(360px, 100%);
+}
+.dialog-head {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+.dialog-icon {
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  color: var(--ok);
+  background: rgba(48, 209, 88, .14);
+}
+.dialog-icon.warning {
+  color: var(--warn);
+  background: rgba(255, 214, 10, .13);
+}
+.dialog-icon svg {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.dialog-copy { min-width: 0; padding-top: 1px; }
+.sheet .dialog-copy h2 {
+  margin: 0 0 5px;
+  font-size: 17px;
+  letter-spacing: 0;
+}
+.dialog-copy p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.dialog-actions { margin-top: 18px; }
+.danger-solid {
+  background: var(--danger);
+  color: #fff;
+}
+.danger-solid:hover { background: #ff6961; }
 .ghost {
   border: 0;
   border-radius: 12px;
