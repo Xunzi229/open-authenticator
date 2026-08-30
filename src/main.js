@@ -4,11 +4,12 @@ const OK = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="
 const EDIT = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>'
 const DEL = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16"/><path d="M9 7V5h6v2"/><path d="M7 7l1 13h8l1-13"/></svg>'
 
-let state = { accounts: [], codes: {}, remain: 30, settings: {}, shown: new Set(), q: '', export: null, qrPage: 0 }
+let state = { accounts: [], codes: {}, remains: {}, settings: {}, shown: new Set(), q: '', export: null, qrPage: 0 }
 let bio = { available: false, enabled: false }
 let timer = null
 let clipTimer = null
 let isSetup = false
+let lastActivity = 0
 
 function invoke(name, args) {
   return window.__TAURI__.core.invoke(name, args)
@@ -64,13 +65,13 @@ function paintList() {
     el.innerHTML = '<div class="empty"><strong>还没有账号</strong>用右上角 + 添加，或从导入导出里扫入 Google 验证器二维码。</div>'
     return
   }
-  const danger = state.remain <= 5
   el.innerHTML = gs.map((g) => `
     <div class="group">
       <div class="label">${esc(g.issuer)}</div>
       <div class="card-list">
       ${g.items.map((a) => {
         const shown = state.shown.has(a.id)
+        const danger = Number(state.remains[a.id] || a.period || 30) <= 5
         const code = shown ? fmt(state.codes[a.id] || '') : '••• •••'
         const sub = [a.email, a.notes].filter(Boolean).join(' · ')
         return `<div class="row ${shown ? 'shown' : ''} ${danger && shown ? 'danger' : ''}" data-id="${a.id}">
@@ -90,18 +91,21 @@ function paintList() {
 }
 
 function paintRing() {
-  const sec = state.remain
+  const active = state.accounts
+    .map((a) => ({ remain: Number(state.remains[a.id] || a.period || 30), period: Number(a.period || 30) }))
+    .sort((a, b) => a.remain - b.remain)[0] || { remain: 30, period: 30 }
+  const sec = active.remain
   const ring = $('ring')
   ring.className = 'ring' + (sec <= 5 ? ' danger' : sec <= 10 ? ' warn' : '')
   $('remain').textContent = String(sec)
-  ring.querySelector('.prog').style.strokeDashoffset = String(RING * (1 - sec / 30))
+  ring.querySelector('.prog').style.strokeDashoffset = String(RING * (1 - sec / active.period))
 }
 
 async function refresh() {
   const snap = await call('snapshot')
   state.accounts = snap.accounts || []
   state.codes = snap.codes || {}
-  state.remain = snap.remain || 30
+  state.remains = snap.remains || {}
   state.settings = snap.settings || {}
   paintRing()
   paintList()
@@ -233,7 +237,7 @@ async function saveExport(name, content) {
 }
 
 function openEditor(acc) {
-  const a = acc || { issuer: '', name: '', email: '', notes: '', secret: '', algorithm: 'SHA1', digits: 6 }
+  const a = acc || { issuer: '', name: '', email: '', notes: '', secret: '', algorithm: 'SHA1', digits: 6, period: 30 }
   openModal(`
     <h2>${acc ? '编辑账号' : '添加账号'}</h2>
     ${field('issuer', '发行方', a.issuer)}
@@ -246,7 +250,10 @@ function openEditor(acc) {
       <option ${a.algorithm === 'SHA256' ? 'selected' : ''}>SHA256</option>
       <option ${a.algorithm === 'SHA512' ? 'selected' : ''}>SHA512</option>
     </select></label>
-    ${field('digits', '位数', a.digits, 'type="number" min="6" max="8"')}
+    <div class="grid-2">
+      ${field('digits', '位数', a.digits, 'type="number" min="6" max="8" step="2"')}
+      ${field('period', '周期（秒）', a.period || 30, 'type="number" min="1" max="86400"')}
+    </div>
     ${acc ? '<button type="button" class="link-btn" id="btn-show-qr">显示二维码</button>' : ''}
     <p class="err" id="form-err"></p>
     <div class="row-btns">
@@ -257,7 +264,7 @@ function openEditor(acc) {
   `)
   $('sheet').querySelector('[data-close]').onclick = closeModal
   $('btn-save').onclick = async () => {
-    const data = Object.fromEntries([...$('sheet').querySelectorAll('input,textarea,select')].map((n) => [n.name, n.name === 'digits' ? Number(n.value) : n.value]))
+    const data = Object.fromEntries([...$('sheet').querySelectorAll('input,textarea,select')].map((n) => [n.name, ['digits', 'period'].includes(n.name) ? Number(n.value) : n.value]))
     try {
       if (acc) {
         if (String(data.secret || '').trim()) {
@@ -616,6 +623,12 @@ async function showGate() {
   $('app').classList.add('hidden')
   $('gate').classList.remove('hidden')
   closeModal()
+  state.accounts = []
+  state.codes = {}
+  state.remains = {}
+  state.shown.clear()
+  state.export = null
+  $('list').replaceChildren()
   const st = await call('status')
   isSetup = !st.exists
   bio.available = !!st.bio_available
@@ -654,6 +667,20 @@ $('btn-add').onclick = () => openEditor(null)
 $('btn-io').onclick = openTransfer
 $('btn-set').onclick = openSettings
 $('q').addEventListener('input', () => { state.q = $('q').value; paintList() })
+
+async function reportActivity() {
+  if ($('app').classList.contains('hidden')) return
+  const now = Date.now()
+  if (now - lastActivity < 1000) return
+  lastActivity = now
+  try {
+    await call('activity')
+  } catch (e) {
+    if (String(e.message).includes('锁定')) await showGate()
+  }
+}
+document.addEventListener('pointerdown', reportActivity, { passive: true })
+document.addEventListener('keydown', reportActivity)
 $('modal').addEventListener('click', (e) => {
   if (e.target.id === 'modal' && $('prompt').classList.contains('hidden')) closeModal()
 })

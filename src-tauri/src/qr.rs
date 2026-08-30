@@ -28,6 +28,11 @@ pub fn parse_uri(uri: &str) -> Result<Vec<QrAccount>, String> {
 
 fn parse_otpauth(uri: &str) -> Result<Vec<QrAccount>, String> {
     let u = Url::parse(uri).map_err(|_| "二维码链接无效")?;
+    match u.host_str() {
+        Some("totp") => {}
+        Some("hotp") => return Err("暂不支持 HOTP 账号".into()),
+        _ => return Err("不是 TOTP 验证器链接".into()),
+    }
     let secret = u
         .query_pairs()
         .find(|(k, _)| k == "secret")
@@ -116,7 +121,7 @@ fn parse_migration(uri: &str) -> Result<Vec<QrAccount>, String> {
             let value = &decoded[pos..pos + len];
             pos += len;
             if field == 1 {
-                if let Some(a) = parse_otp(value) {
+                if let Some(a) = parse_otp(value)? {
                     accounts.push(a);
                 }
             }
@@ -134,13 +139,14 @@ fn parse_migration(uri: &str) -> Result<Vec<QrAccount>, String> {
     Ok(accounts)
 }
 
-fn parse_otp(data: &[u8]) -> Option<QrAccount> {
+fn parse_otp(data: &[u8]) -> Result<Option<QrAccount>, String> {
     let mut pos = 0usize;
     let mut secret = Vec::new();
     let mut name = String::new();
     let mut issuer = String::new();
     let mut algorithm = 1u32;
     let mut digits = 1u32;
+    let mut otp_type = 0u32;
     while pos < data.len() {
         let Some((tag, p)) = read_varint(data, pos) else {
             break;
@@ -158,6 +164,9 @@ fn parse_otp(data: &[u8]) -> Option<QrAccount> {
             }
             if field == 5 {
                 digits = v as u32;
+            }
+            if field == 6 {
+                otp_type = v as u32;
             }
         } else if wire == 2 {
             let Some((len, p)) = read_varint(data, pos) else {
@@ -184,7 +193,13 @@ fn parse_otp(data: &[u8]) -> Option<QrAccount> {
         }
     }
     if secret.is_empty() {
-        return None;
+        return Ok(None);
+    }
+    if otp_type == 1 {
+        return Err("迁移数据包含暂不支持的 HOTP 账号".into());
+    }
+    if otp_type != 0 && otp_type != 2 {
+        return Err("迁移数据包含未知的 OTP 类型".into());
     }
     // Google proto: 1=SHA1 2=SHA256 3=SHA512；DigitCount 1=6 2=8，也兼容直接写 6/8
     let algo = match algorithm {
@@ -193,14 +208,14 @@ fn parse_otp(data: &[u8]) -> Option<QrAccount> {
         _ => "SHA1",
     };
     let d = if digits == 2 || digits == 8 { 8 } else { 6 };
-    Some(QrAccount {
+    Ok(Some(QrAccount {
         issuer,
         name,
         secret: BASE32_NOPAD.encode(&secret),
         algorithm: algo.into(),
         digits: d,
         period: 30,
-    })
+    }))
 }
 
 fn read_varint(data: &[u8], mut pos: usize) -> Option<(usize, usize)> {
@@ -488,5 +503,34 @@ fn parse_json(text: &str) -> Result<Vec<QrAccount>, String> {
         Err("JSON 里没有账号".into())
     } else {
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_hotp_uri_instead_of_generating_wrong_codes() {
+        let result = parse_uri("otpauth://hotp/Example:user?secret=JBSWY3DPEHPK3PXP&counter=1");
+        assert_eq!(result.unwrap_err(), "暂不支持 HOTP 账号");
+    }
+
+    #[test]
+    fn accepts_totp_uri() {
+        let result = parse_uri("otpauth://totp/Example:user?secret=JBSWY3DPEHPK3PXP").unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].issuer, "Example");
+    }
+
+    #[test]
+    fn rejects_hotp_in_google_migration_data() {
+        let mut message = Vec::new();
+        write_len(&mut message, 1, b"secret");
+        write_var(&mut message, 6, 1);
+        assert_eq!(
+            parse_otp(&message).unwrap_err(),
+            "迁移数据包含暂不支持的 HOTP 账号"
+        );
     }
 }

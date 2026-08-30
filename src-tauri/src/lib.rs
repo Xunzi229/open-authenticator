@@ -143,18 +143,26 @@ fn lock(state: State<AppState>) -> Result<Value, String> {
 }
 
 #[tauri::command]
+fn activity(state: State<AppState>) -> Result<Value, String> {
+    state.vault.lock().map_err(|e| e.to_string())?.activity()?;
+    ok(json!({}))
+}
+
+#[tauri::command]
 fn snapshot(state: State<AppState>) -> Result<Value, String> {
     let mut v = state.vault.lock().map_err(|e| e.to_string())?;
     let accounts = v.accounts()?;
     let settings = v.settings()?;
     let mut codes = serde_json::Map::new();
-    let mut remain = 30u64;
-    let pub_acc: Vec<Value> = accounts
-        .iter()
-        .map(|a| {
-            codes.insert(a.id.clone(), json!(totp::totp(&a.secret, a.digits, &a.algorithm, a.period)));
-            remain = totp::remain(a.period);
-            json!({
+    let mut remains = serde_json::Map::new();
+    let mut pub_acc = Vec::with_capacity(accounts.len());
+    for a in &accounts {
+        codes.insert(
+            a.id.clone(),
+            json!(totp::totp(&a.secret, a.digits, &a.algorithm, a.period)?),
+        );
+        remains.insert(a.id.clone(), json!(totp::remain(a.period)));
+        pub_acc.push(json!({
                 "id": a.id,
                 "issuer": a.issuer,
                 "name": a.name,
@@ -163,13 +171,12 @@ fn snapshot(state: State<AppState>) -> Result<Value, String> {
                 "algorithm": a.algorithm,
                 "digits": a.digits,
                 "period": a.period
-            })
-        })
-        .collect();
+            }));
+    }
     ok(json!({
         "accounts": pub_acc,
         "codes": codes,
-        "remain": remain,
+        "remains": remains,
         "settings": {
             "webdav_url": settings.webdav_url,
             "webdav_user": settings.webdav_user,
@@ -184,7 +191,20 @@ fn snapshot(state: State<AppState>) -> Result<Value, String> {
 #[tauri::command]
 fn get_account(state: State<AppState>, id: String) -> Result<Value, String> {
     let acc = state.vault.lock().map_err(|e| e.to_string())?.get(&id)?;
-    ok(json!({ "account": acc }))
+    ok(json!({ "account": account_view(acc) }))
+}
+
+fn account_view(acc: Account) -> Value {
+    json!({
+        "id": acc.id,
+        "issuer": acc.issuer,
+        "name": acc.name,
+        "email": acc.email,
+        "notes": acc.notes,
+        "algorithm": acc.algorithm,
+        "digits": acc.digits,
+        "period": acc.period
+    })
 }
 
 fn account_from(v: Value) -> Account {
@@ -472,11 +492,34 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
-            status, setup, unlock, lock, snapshot, get_account, add_account, update_account,
+            status, setup, unlock, lock, activity, snapshot, get_account, add_account, update_account,
             delete_account, import_uri, import_qr, import_text, export_data, account_qr,
             save_settings, change_password, webdav_upload, webdav_download, save_text,
             bio_status, bio_enable, bio_disable, unlock_bio
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn editable_account_view_never_exposes_secret() {
+        let account = Account {
+            id: "id".into(),
+            issuer: "Example".into(),
+            name: "user".into(),
+            email: String::new(),
+            notes: String::new(),
+            secret: "JBSWY3DPEHPK3PXP".into(),
+            algorithm: "SHA1".into(),
+            digits: 6,
+            period: 30,
+            created: 0,
+            updated: 0,
+        };
+        assert!(account_view(account).get("secret").is_none());
+    }
 }

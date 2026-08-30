@@ -1,13 +1,15 @@
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::crypto;
 use crate::qr::QrAccount;
+use crate::totp;
 
 pub const MIN_PASSWORD: usize = 8;
 
@@ -149,8 +151,13 @@ impl Vault {
                 }
             }
         }
-        self.touch();
         self.payload.as_mut().ok_or_else(|| "已锁定".into())
+    }
+
+    pub fn activity(&mut self) -> Result<(), String> {
+        self.need()?;
+        self.touch();
+        Ok(())
     }
 
     pub fn setup(&mut self, password: &str, confirm: &str) -> Result<(), String> {
@@ -206,8 +213,16 @@ impl Vault {
             fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }
         let tmp = self.path.with_extension("enc.tmp");
-        fs::write(&tmp, &blob).map_err(|e| e.to_string())?;
-        fs::rename(&tmp, &self.path).map_err(|e| e.to_string())?;
+        let mut file = OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(&tmp)
+            .map_err(|e| e.to_string())?;
+        file.write_all(&blob).map_err(|e| e.to_string())?;
+        file.sync_all().map_err(|e| e.to_string())?;
+        drop(file);
+        atomic_replace(&tmp, &self.path)?;
         self.touch();
         Ok(())
     }
@@ -268,7 +283,10 @@ impl Vault {
             .need()?
             .accounts
             .iter()
-            .map(|a| a.secret.replace(' ', "").to_ascii_uppercase())
+            .map(|a| {
+                totp::normalize_secret(&a.secret)
+                    .unwrap_or_else(|_| a.secret.replace(' ', "").to_ascii_uppercase())
+            })
             .collect();
         let mut added = Vec::new();
         for it in items {
@@ -383,6 +401,30 @@ impl Vault {
     }
 }
 
+#[cfg(windows)]
+fn atomic_replace(from: &Path, to: &Path) -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::Win32::Storage::FileSystem::{
+        MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+    };
+
+    let from: Vec<u16> = from.as_os_str().encode_wide().chain(Some(0)).collect();
+    let to: Vec<u16> = to.as_os_str().encode_wide().chain(Some(0)).collect();
+    unsafe {
+        MoveFileExW(
+            windows::core::PCWSTR(from.as_ptr()),
+            windows::core::PCWSTR(to.as_ptr()),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    }
+    .map_err(|e| e.to_string())
+}
+
+#[cfg(not(windows))]
+fn atomic_replace(from: &Path, to: &Path) -> Result<(), String> {
+    fs::rename(from, to).map_err(|e| e.to_string())
+}
+
 fn now() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
 }
@@ -394,26 +436,15 @@ fn new_id() -> String {
 }
 
 fn normalize(a: &mut Account) -> Result<(), String> {
-    a.secret = a.secret.replace(' ', "").to_ascii_uppercase();
+    a.secret = totp::normalize_secret(&a.secret)?;
     a.issuer = a.issuer.trim().to_string();
     a.name = a.name.trim().to_string();
     a.email = a.email.trim().to_string();
     a.notes = a.notes.trim().to_string();
-    if a.secret.is_empty() {
-        return Err("缺少密钥".into());
-    }
     if a.name.is_empty() && a.issuer.is_empty() {
         return Err("请填写名称或发行方".into());
     }
-    if a.algorithm.is_empty() {
-        a.algorithm = "SHA1".into();
-    }
-    if a.digits == 0 {
-        a.digits = 6;
-    }
-    if a.period == 0 {
-        a.period = 30;
-    }
+    a.algorithm = totp::validate_parameters(a.digits, &a.algorithm, a.period)?;
     let t = now();
     if a.id.is_empty() {
         a.id = new_id();
@@ -423,4 +454,70 @@ fn normalize(a: &mut Account) -> Result<(), String> {
     }
     a.updated = t;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn account(secret: &str) -> Account {
+        Account {
+            id: String::new(),
+            issuer: "Example".into(),
+            name: "user".into(),
+            email: String::new(),
+            notes: String::new(),
+            secret: secret.into(),
+            algorithm: "SHA1".into(),
+            digits: 6,
+            period: 30,
+            created: 0,
+            updated: 0,
+        }
+    }
+
+    #[test]
+    fn saves_over_existing_vault_and_reopens_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vault.enc");
+        let mut vault = Vault::new(path.clone());
+        vault.setup("correct horse", "correct horse").unwrap();
+        vault.add(account("JBSWY3DPEHPK3PXP")).unwrap();
+
+        let mut reopened = Vault::new(path);
+        reopened.unlock("correct horse").unwrap();
+        assert_eq!(reopened.accounts().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn rejects_invalid_otp_data_before_saving() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut vault = Vault::new(dir.path().join("vault.enc"));
+        vault.setup("correct horse", "correct horse").unwrap();
+
+        assert!(vault.add(account("not-a-base32-secret-0189")).is_err());
+        let mut invalid_digits = account("JBSWY3DPEHPK3PXP");
+        invalid_digits.digits = 7;
+        assert!(vault.add(invalid_digits).is_err());
+        assert!(vault.accounts().unwrap().is_empty());
+    }
+
+    #[test]
+    fn polling_reads_do_not_reset_auto_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut vault = Vault::new(dir.path().join("vault.enc"));
+        vault.setup("correct horse", "correct horse").unwrap();
+        let mut settings = vault.settings().unwrap();
+        settings.autolock_seconds = 10;
+        vault.update_settings(settings).unwrap();
+
+        let previous = Instant::now() - Duration::from_secs(9);
+        vault.last_active = Some(previous);
+        assert!(vault.accounts().is_ok());
+        assert_eq!(vault.last_active, Some(previous));
+
+        vault.last_active = Some(Instant::now() - Duration::from_secs(11));
+        assert!(vault.accounts().is_err());
+        assert!(!vault.unlocked());
+    }
 }

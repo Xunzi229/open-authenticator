@@ -48,7 +48,11 @@ windows = { version = "0.61", features = [
   "Foundation",
   "Security_Credentials_UI",
   "Win32_Foundation",
+  "Win32_Storage_FileSystem",
   "Win32_System_WinRT",
   "Win32_UI_WindowsAndMessaging",
 ] }
 windows-future = "0.2"
+
+[dev-dependencies]
+tempfile = "3"
