@@ -30,11 +30,11 @@ fn quit_app(app: &tauri::AppHandle) {
     app.exit(0);
 }
 
-fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
     let show = MenuItem::with_id(app, "show", "显示窗口", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&show, &quit])?;
-    let icon = app.default_window_icon().cloned().ok_or("缺少窗口图标")?;
+    let icon = app.default_window_icon().cloned().expect("missing window icon");
     TrayIconBuilder::with_id("tray")
         .tooltip("验证器")
         .icon(icon)
