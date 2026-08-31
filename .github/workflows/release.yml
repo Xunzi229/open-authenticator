@@ -53,9 +53,13 @@ jobs:
           WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
         shell: pwsh
         run: |
-          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE)) {
-            if ($env:GITHUB_REF_NAME -notmatch '-') { throw 'Stable releases require WINDOWS_CERTIFICATE' }
-            Write-Host 'Unsigned prerelease: WINDOWS_CERTIFICATE is not configured'
+          $hasCertificate = -not [string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE)
+          $hasPassword = -not [string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE_PASSWORD)
+          if ($hasCertificate -ne $hasPassword) {
+            throw 'WINDOWS_CERTIFICATE and WINDOWS_CERTIFICATE_PASSWORD must be configured together'
+          }
+          if (-not $hasCertificate) {
+            Write-Host 'Unsigned Windows release: signing certificate is not configured'
             exit 0
           }
           $certificatePath = Join-Path $env:RUNNER_TEMP 'authenticator-signing.pfx'
@@ -75,9 +79,12 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          if [[ -n "$APPLE_CERTIFICATE" && -z "$APPLE_CERTIFICATE_PASSWORD" ]] || \
-             [[ -z "$APPLE_CERTIFICATE" && -n "$APPLE_CERTIFICATE_PASSWORD" ]]; then
-            echo 'APPLE_CERTIFICATE and APPLE_CERTIFICATE_PASSWORD must be configured together' >&2
+          signing_values=0
+          [[ -n "$APPLE_CERTIFICATE" ]] && signing_values=$((signing_values + 1))
+          [[ -n "$APPLE_CERTIFICATE_PASSWORD" ]] && signing_values=$((signing_values + 1))
+          [[ -n "$APPLE_SIGNING_IDENTITY" ]] && signing_values=$((signing_values + 1))
+          if [[ "$signing_values" -ne 0 && "$signing_values" -ne 3 ]]; then
+            echo 'APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD, and APPLE_SIGNING_IDENTITY must be configured together' >&2
             exit 1
           fi
           if { [[ -n "$APPLE_ID" ]] || [[ -n "$APPLE_PASSWORD" ]] || [[ -n "$APPLE_TEAM_ID" ]]; } && \
@@ -85,14 +92,9 @@ jobs:
             echo 'APPLE_ID, APPLE_PASSWORD, and APPLE_TEAM_ID must be configured together' >&2
             exit 1
           fi
-          if [[ "$GITHUB_REF_NAME" != *-* ]] && \
-             { [[ -z "$APPLE_CERTIFICATE" ]] || [[ -z "$APPLE_ID" ]]; }; then
-            echo 'Stable releases require Apple signing and notarization secrets' >&2
-            exit 1
-          fi
           if [[ -z "$APPLE_CERTIFICATE" ]]; then
             echo 'APPLE_SIGNING_IDENTITY=-' >> "$GITHUB_ENV"
-            echo 'Ad-hoc signed prerelease: Apple signing secrets are not configured'
+            echo 'Ad-hoc signed macOS release: Apple signing secrets are not configured'
             exit 0
           fi
           for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
