@@ -109,7 +109,6 @@ fn parse_migration(uri: &str) -> Result<Vec<QrAccount>, String> {
     let mut pos = 0usize;
     let mut batch_size = 1usize;
     let mut batch_index = 0usize;
-    let mut batch_id = None;
     while pos < decoded.len() {
         let (tag, p) = read_varint(&decoded, pos)?;
         pos = p;
@@ -121,7 +120,6 @@ fn parse_migration(uri: &str) -> Result<Vec<QrAccount>, String> {
             match field {
                 3 => batch_size = value,
                 4 => batch_index = value,
-                5 => batch_id = Some(value),
                 _ => {}
             }
         } else if wire == 2 {
@@ -155,7 +153,8 @@ fn parse_migration(uri: &str) -> Result<Vec<QrAccount>, String> {
     if accounts.is_empty() {
         return Err("二维码里没有账号".into());
     }
-    if batch_size == 0 || batch_index >= batch_size || (batch_size > 1 && batch_id.is_none()) {
+    // 部分 Google 迁移码省略 batch_id；逐张导入不依赖该字段关联批次。
+    if batch_size == 0 || batch_index >= batch_size {
         return Err("migration 批次信息无效".into());
     }
     Ok(accounts)
@@ -585,6 +584,29 @@ mod tests {
         let encoded = base64::engine::general_purpose::STANDARD.encode([0x0a, 0x7f, 0x01]);
         let result = parse_uri(&format!("otpauth-migration://offline?data={encoded}"));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn accepts_migration_batches_without_batch_id_and_checks_bounds() {
+        let mut message = Vec::new();
+        write_len(&mut message, 1, b"test-secret");
+        write_var(&mut message, 6, 2);
+        for (size, index, valid) in [(2, 0, true), (2, 1, true), (0, 0, false), (2, 2, false)] {
+            let mut payload = Vec::new();
+            write_len(&mut payload, 1, &message);
+            write_var(&mut payload, 2, 2);
+            write_var(&mut payload, 3, size);
+            write_var(&mut payload, 4, index);
+            let encoded = base64::engine::general_purpose::STANDARD.encode(&payload);
+            let result = parse_uri(&format!("otpauth-migration://offline?data={encoded}"));
+            if valid {
+                let accounts = result.unwrap();
+                assert_eq!(accounts.len(), 1);
+                assert_eq!(accounts[0].secret, BASE32_NOPAD.encode(b"test-secret"));
+            } else {
+                assert_eq!(result.unwrap_err(), "migration 批次信息无效");
+            }
+        }
     }
 
     #[test]
