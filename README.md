@@ -1,36 +1,19 @@
 # 验证器
 
-Rust + Tauri 2 跨平台 TOTP 客户端（Windows / Linux / macOS）。系统 WebView，不内嵌 Chromium。
+跨平台 TOTP 客户端（Windows / Linux / macOS），Rust + Tauri 2。
 
-## 安全
+下载：[GitHub Releases](https://github.com/Xunzi229/open-authenticator/releases)
 
-- 默认不持久化主密码。Argon2id 派生密钥，AES-256-GCM 加密整个保险库
-- 错误密码递增延迟；空闲自动锁定；复制后可清空剪贴板
-- 列表不带密钥；验证码默认打码
-- WebDAV 只通过 HTTPS（localhost 可用 HTTP）同步 `vault.enc` 密文；优先使用 ETag 防止并发覆盖，不提供 ETag 的服务器使用 SHA-256 上传前比对和上传后回读校验
+- 主密码加密保险库（Argon2id + AES-256-GCM）
+- 导入 Google 验证器二维码 / `otpauth` 链接
+- Touch ID、Windows Hello 可选解锁
+- HTTPS WebDAV 同步密文；空闲自动锁定
 
-Windows Hello 为可选便利功能。开启后，主密码会由当前 Windows 用户的系统凭据存储保护；Hello 验证通过后应用才会读取它。该模式的安全边界是 Windows 用户账户，不等同于硬件密钥直接解密保险库。
-
-WebDAV 拉取前会在保险库目录的 `backups/` 中保存一份本地加密备份。
-
-保险库位置：
-
-- Windows: `%APPDATA%\Authenticator\vault.enc`
-- macOS: `~/Library/Application Support/Authenticator/vault.enc`
-- Linux: `~/.local/share/authenticator/vault.enc`
-
-## 本地开发
-
-需要：Node 18+、Rust stable、各平台 Tauri 系统依赖。
+保险库：Windows `%APPDATA%\Authenticator\vault.enc` · macOS `~/Library/Application Support/Authenticator/vault.enc` · Linux `~/.local/share/authenticator/vault.enc`
 
 ```sh
-cd authenticator
 npm install
 npm run tauri dev
 ```
 
-## 打包
-
-推送和拉取请求由 `.github/workflows/ci.yml` 在 Windows、Linux、macOS 上执行格式检查、Clippy、测试和无 bundle 编译。给仓库打 `v*` 标签会由 `.github/workflows/release.yml` 重新测试、打包并发布 GitHub Release；带 `-` 的标签发布为 prerelease。
-
-稳定版发布要求配置 Windows Authenticode 证书和 Apple Developer ID/公证 secrets。prerelease 在未配置正式证书时允许生成未签名 Windows 包和 macOS ad-hoc 签名包。
+打 `v*` 标签会走 Actions 发 GitHub Release。
