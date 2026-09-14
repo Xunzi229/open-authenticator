@@ -34,10 +34,14 @@
           <input id="pw1" type="password" autocomplete="new-password" spellcheck="false" />
         </label>
         <label id="pw2-wrap">确认密码 / 主密码
-          <input id="pw2" type="password" autocomplete="current-password" spellcheck="false" />
+          <span class="pw-wrap">
+            <input id="pw2" type="password" autocomplete="current-password" spellcheck="false" />
+            <button type="submit" class="pw-go hidden" id="gate-btn" title="解锁" aria-label="解锁">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 7.9-1"/></svg>
+            </button>
+          </span>
         </label>
         <p class="err" id="gate-err"></p>
-        <button type="submit" id="gate-btn">解锁</button>
         <button type="button" id="btn-bio" class="ghost hidden">指纹解锁</button>
       </form>
     </div>

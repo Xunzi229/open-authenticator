@@ -1,6 +1,8 @@
 const RING = 2 * Math.PI * 15.5
 const COPY = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5h10"/></svg>'
 const OK = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12l5 5L20 7"/></svg>'
+const ICON_UNLOCK = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 7.9-1"/></svg>'
+const ICON_GO = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12l5 5L20 7"/></svg>'
 const EDIT = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>'
 const DEL = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16"/><path d="M9 7V5h6v2"/><path d="M7 7l1 13h8l1-13"/></svg>'
 
@@ -75,6 +77,11 @@ function groups(accounts) {
       out.push(g)
     }
     map.get(a.issuer).items.push(a)
+  }
+  for (const g of out) {
+    g.items.sort((a, b) =>
+      avatarSource(a).localeCompare(avatarSource(b), 'zh-CN', { sensitivity: 'base', numeric: true })
+    )
   }
   return out
 }
@@ -236,12 +243,11 @@ function askAuth(hint, run) {
     openPrompt(`
       <h2>验证身份</h2>
       <p class="hint">${esc(hint)}</p>
-      ${field('auth-pw', '主密码', '', 'type="password" autocomplete="current-password"')}
+      ${field('auth-pw', '主密码', '', 'type="password" autocomplete="current-password"', { id: 'auth-ok', title: '验证', icon: ICON_GO })}
       <p class="err" id="auth-err"></p>
       <div class="row-btns">
         <button type="button" class="ghost" id="auth-cancel">取消</button>
         ${bio.enabled ? '<button type="button" class="ghost" id="auth-bio">指纹验证</button>' : ''}
-        <button type="button" class="primary" id="auth-ok">验证</button>
       </div>
     `, () => finish(null))
     $('auth-cancel').onclick = () => finish(null)
@@ -265,7 +271,7 @@ function askAuth(hint, run) {
     const bioBtn = $('auth-bio')
     if (bioBtn) bioBtn.onclick = () => go(true)
     const input = $('prompt-sheet').querySelector('[name="auth-pw"]')
-    input?.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); go(false) } })
+    bindPwGo(input, $('auth-ok'), [], () => go(false))
     input?.focus()
   })
 }
@@ -311,8 +317,29 @@ function appDialog({ title, message, confirmLabel = '确定', cancelLabel = '', 
     $('prompt').onclick = (e) => { if (e.target.id === 'prompt') dismissPrompt() }
   })
 }
-function field(name, label, value, extra = '') {
-  return `<label>${label}<input name="${name}" value="${esc(value || '')}" ${extra} /></label>`
+function field(name, label, value, extra = '', action = null) {
+  const input = `<input name="${name}" value="${esc(value || '')}" ${extra} />`
+  if (!action) return `<label>${label}${input}</label>`
+  return `<label class="pw-field">${label}<span class="pw-wrap">${input}<button type="button" class="pw-go hidden" id="${esc(action.id)}" title="${esc(action.title)}" aria-label="${esc(action.title)}">${action.icon}</button></span></label>`
+}
+function bindPwGo(input, btn, extra = [], onEnter = null) {
+  if (!input || !btn) return
+  const sync = () => {
+    const ready = [input, ...extra].every((el) => String(el?.value || '').length > 0)
+    btn.classList.toggle('hidden', !ready)
+  }
+  for (const el of [input, ...extra]) {
+    el.addEventListener('input', sync)
+    el.addEventListener('change', sync)
+    if (onEnter) {
+      el.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter') return
+        e.preventDefault()
+        if (!btn.classList.contains('hidden')) onEnter()
+      })
+    }
+  }
+  sync()
 }
 function download(name, text, type) {
   const a = document.createElement('a')
@@ -473,9 +500,8 @@ function showExportGate() {
   if (!box) return
   box.innerHTML = `
     <p class="hint">查看导出二维码或下载备份，需要再次验证身份。</p>
-    ${field('export-pw', '主密码', '', 'type="password" autocomplete="current-password"')}
-    ${bio.enabled ? '<div class="row-btns tight"><button type="button" class="ghost" id="btn-export-bio">使用指纹验证</button></div>' : ''}
-    <div class="row-btns tight"><button type="button" class="primary" id="btn-export-auth">验证并显示</button></div>`
+    ${field('export-pw', '主密码', '', 'type="password" autocomplete="current-password"', { id: 'btn-export-auth', title: '验证', icon: ICON_GO })}
+    ${bio.enabled ? '<div class="row-btns tight"><button type="button" class="ghost" id="btn-export-bio">使用指纹验证</button></div>' : ''}`
   const runExport = async (biometric) => {
     const pw = biometric ? '' : ($('sheet').querySelector('[name="export-pw"]')?.value || '')
     err.classList.remove('ok')
@@ -486,6 +512,7 @@ function showExportGate() {
     } catch (e) { err.textContent = e.message }
   }
   $('btn-export-auth').onclick = () => runExport(false)
+  bindPwGo($('sheet').querySelector('[name="export-pw"]'), $('btn-export-auth'), [], () => runExport(false))
   const expBio = $('btn-export-bio')
   if (expBio) expBio.onclick = () => runExport(true)
 }
@@ -628,7 +655,7 @@ function renderSettings(s) {
         <p class="hint">${bio.enabled ? '锁定后可用指纹解锁，查看二维码和更改密钥也可指纹验证。' : '开启后可用 Touch ID 或 Windows Hello 解锁，以及二次验证。'}</p>
         ${bio.enabled
           ? '<div class="row-btns tight"><button type="button" class="ghost" id="btn-bio-off">关闭指纹解锁</button></div>'
-          : `${field('bio-pw', '主密码', '', 'type="password" autocomplete="current-password"')}<div class="row-btns tight"><button type="button" class="primary" id="btn-bio-on">开启指纹解锁</button></div>`}
+          : `${field('bio-pw', '主密码', '', 'type="password" autocomplete="current-password"', { id: 'btn-bio-on', title: '开启指纹解锁', icon: ICON_GO })}`}
       ` : '<p class="hint">当前设备没有可用的指纹、Touch ID 或 Windows Hello。</p>'}
     </section>
     <p class="sec-title">WebDAV 同步</p>
@@ -651,8 +678,7 @@ function renderSettings(s) {
     <section class="block">
       ${field('old', '当前密码', '', 'type="password"')}
       ${field('newpw', '新密码', '', 'type="password"')}
-      ${field('new2', '确认新密码', '', 'type="password"')}
-      <div class="row-btns tight"><button type="button" class="danger-btn" id="btn-pw">更新主密码</button></div>
+      ${field('new2', '确认新密码', '', 'type="password"', { id: 'btn-pw', title: '更新主密码', icon: ICON_GO })}
     </section>
     <p class="err" id="form-err"></p>
     <div class="row-btns sheet-actions">
@@ -727,21 +753,30 @@ function renderSettings(s) {
       await refresh()
     }, '已从远程覆盖本地')
   }
-  $('btn-pw').onclick = async () => {
+  const updatePassword = async () => {
     try { await call('change_password', { old: val('old'), newPassword: val('newpw'), confirm: val('new2') }); $('form-err').textContent = '主密码已更新' }
     catch (e) { $('form-err').textContent = e.message }
   }
+  $('btn-pw').onclick = updatePassword
+  bindPwGo($('sheet').querySelector('[name="new2"]'), $('btn-pw'), [
+    $('sheet').querySelector('[name="old"]'),
+    $('sheet').querySelector('[name="newpw"]'),
+  ], updatePassword)
   const bioOn = $('btn-bio-on')
-  if (bioOn) bioOn.onclick = async () => {
-    $('form-err').classList.remove('ok')
-    try {
-      await call('bio_enable', { password: val('bio-pw') })
-      const b = await call('bio_status')
-      bio.available = !!b.available
-      bio.enabled = !!b.enabled
-      if (!bio.enabled) throw new Error('指纹凭据未能保存')
-      refreshBioSection('已开启指纹解锁')
-    } catch (e) { $('form-err').textContent = e.message }
+  if (bioOn) {
+    const enableBio = async () => {
+      $('form-err').classList.remove('ok')
+      try {
+        await call('bio_enable', { password: val('bio-pw') })
+        const b = await call('bio_status')
+        bio.available = !!b.available
+        bio.enabled = !!b.enabled
+        if (!bio.enabled) throw new Error('指纹凭据未能保存')
+        refreshBioSection('已开启指纹解锁')
+      } catch (e) { $('form-err').textContent = e.message }
+    }
+    bioOn.onclick = enableBio
+    bindPwGo($('sheet').querySelector('[name="bio-pw"]'), bioOn, [], enableBio)
   }
   const bioOff = $('btn-bio-off')
   if (bioOff) bioOff.onclick = async () => {
@@ -785,12 +820,23 @@ async function showGate() {
   bio.available = !!st.bio_available
   bio.enabled = !!st.bio_enabled
   $('gate-sub').textContent = isSetup ? '首次使用，请设置主密码（至少 8 位）' : (bio.enabled ? '指纹或主密码解锁' : '输入主密码解锁')
-  $('gate-btn').textContent = isSetup ? '创建保险库' : '解锁'
+  const gateTitle = isSetup ? '创建保险库' : '解锁'
+  $('gate-btn').title = gateTitle
+  $('gate-btn').setAttribute('aria-label', gateTitle)
+  $('gate-btn').innerHTML = isSetup ? ICON_GO : ICON_UNLOCK
   document.querySelector('.setup-only').classList.toggle('hidden', !isSetup)
   $('btn-bio').classList.toggle('hidden', isSetup || !bio.available || !bio.enabled)
   $('pw1').value = ''
   $('pw2').value = ''
   $('gate-err').textContent = ''
+  syncGateAction()
+}
+
+function syncGateAction() {
+  const ready = isSetup
+    ? ($('pw1').value.length > 0 && $('pw2').value.length > 0)
+    : $('pw2').value.length > 0
+  $('gate-btn').classList.toggle('hidden', !ready)
 }
 
 async function tryBioUnlock() {
@@ -803,6 +849,7 @@ async function tryBioUnlock() {
 
 $('gate-form').addEventListener('submit', async (e) => {
   e.preventDefault()
+  if ($('gate-btn').classList.contains('hidden')) return
   $('gate-err').textContent = ''
   try {
     if (isSetup) await call('setup', { password: $('pw1').value, confirm: $('pw2').value })
@@ -811,6 +858,10 @@ $('gate-form').addEventListener('submit', async (e) => {
   } catch (err) { $('gate-err').textContent = err.message }
 })
 
+$('pw1').addEventListener('input', syncGateAction)
+$('pw1').addEventListener('change', syncGateAction)
+$('pw2').addEventListener('input', syncGateAction)
+$('pw2').addEventListener('change', syncGateAction)
 $('btn-lock').onclick = async () => {
   try {
     await call('lock')

@@ -95,11 +95,30 @@ input:focus, textarea:focus, select:focus {
 }
 textarea { min-height: 72px; resize: vertical; }
 button { font: inherit; cursor: pointer; }
-#gate-btn, .primary {
+.primary {
   width: 100%; border: 0; border-radius: 12px; padding: 11px;
   background: var(--accent); color: #fff; font-weight: 600;
 }
-#gate-btn:hover, .primary:hover { background: var(--accent-press); }
+.primary:hover { background: var(--accent-press); }
+.pw-wrap {
+  position: relative;
+  display: block;
+  margin-top: 6px;
+}
+.pw-wrap input {
+  margin-top: 0;
+  padding-right: 44px;
+}
+.pw-go {
+  position: absolute;
+  right: 6px; top: 50%;
+  transform: translateY(-50%);
+  width: 28px; height: 28px; padding: 0; border: 0; border-radius: 8px;
+  background: var(--accent); color: #fff;
+  display: grid; place-items: center;
+}
+.pw-go:hover { background: var(--accent-press); }
+.pw-go svg { display: block; }
 #btn-bio { width: 100%; margin-top: 8px; }
 .err { min-height: 18px; color: var(--danger); font-size: 12px; }
 .err.ok { color: var(--ok); }
