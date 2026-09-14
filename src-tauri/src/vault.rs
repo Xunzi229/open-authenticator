@@ -350,27 +350,16 @@ impl Vault {
     }
 
     pub fn add_many(&mut self, items: Vec<QrAccount>) -> Result<usize, String> {
-        let mut seen: HashSet<(String, String, u32, u64)> = self
-            .need()?
-            .accounts
-            .iter()
-            .map(|a| {
-                (
-                    totp::normalize_secret(&a.secret)
-                        .unwrap_or_else(|_| a.secret.replace(' ', "").to_ascii_uppercase()),
-                    a.algorithm.to_ascii_uppercase().replace('-', ""),
-                    a.digits,
-                    a.period,
-                )
-            })
-            .collect();
+        let mut seen: HashSet<(String, String, String, u32, u64)> =
+            self.need()?.accounts.iter().map(import_dup_key).collect();
         let mut added = Vec::new();
         for it in items {
+            let (issuer, name, email) = split_identity(&it.issuer, &it.name);
             let mut a = Account {
                 id: String::new(),
-                issuer: it.issuer,
-                name: it.name,
-                email: String::new(),
+                issuer,
+                name,
+                email,
                 notes: String::new(),
                 secret: it.secret,
                 algorithm: it.algorithm,
@@ -380,7 +369,7 @@ impl Vault {
                 updated: 0,
             };
             normalize(&mut a)?;
-            if !seen.insert((a.secret.clone(), a.algorithm.clone(), a.digits, a.period)) {
+            if !seen.insert(import_dup_key(&a)) {
                 continue;
             }
             added.push(a);
@@ -668,6 +657,56 @@ fn new_id() -> String {
     hex::encode(b)
 }
 
+fn looks_like_email(s: &str) -> bool {
+    let s = s.trim();
+    match s.split_once('@') {
+        Some((user, domain)) => {
+            !user.is_empty()
+                && !user.contains('@')
+                && !s.chars().any(char::is_whitespace)
+                && domain.contains('.')
+                && !domain.starts_with('.')
+                && !domain.ends_with('.')
+        }
+        None => false,
+    }
+}
+
+fn split_identity(issuer: &str, name: &str) -> (String, String, String) {
+    let mut issuer = issuer.trim().to_string();
+    let mut name = name.trim().to_string();
+    if let Some((left, right)) = name.split_once(':') {
+        let left = left.trim();
+        let right = right.trim();
+        if !left.is_empty()
+            && !right.is_empty()
+            && !left.contains('@')
+            && (issuer.is_empty() || issuer.eq_ignore_ascii_case(left))
+        {
+            if issuer.is_empty() {
+                issuer = left.to_string();
+            }
+            name = right.to_string();
+        }
+    }
+    let email = if looks_like_email(&name) {
+        name.clone()
+    } else {
+        String::new()
+    };
+    (issuer, name, email)
+}
+
+fn import_dup_key(a: &Account) -> (String, String, String, u32, u64) {
+    (
+        a.issuer.to_lowercase(),
+        a.secret.clone(),
+        a.algorithm.clone(),
+        a.digits,
+        a.period,
+    )
+}
+
 fn normalize(a: &mut Account) -> Result<(), String> {
     if a.secret.len() > MAX_SECRET_FIELD
         || [&a.issuer, &a.name, &a.email, &a.notes]
@@ -778,5 +817,78 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut vault = Vault::new(dir.path().join("vault.enc"));
         assert!(vault.setup("密码密码", "密码密码").is_err());
+    }
+
+    fn qr_account(issuer: &str, name: &str, secret: &str) -> QrAccount {
+        QrAccount {
+            issuer: issuer.into(),
+            name: name.into(),
+            secret: secret.into(),
+            algorithm: "SHA1".into(),
+            digits: 6,
+            period: 30,
+        }
+    }
+
+    #[test]
+    fn import_keeps_same_email_with_different_issuers() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut vault = Vault::new(dir.path().join("vault.enc"));
+        vault.setup("correct horse", "correct horse").unwrap();
+        let n = vault
+            .add_many(vec![
+                qr_account("Google", "user@example.com", "JBSWY3DPEHPK3PXP"),
+                qr_account("OpenAI", "user@example.com", "JBSWY3DPEHPK3PXP"),
+            ])
+            .unwrap();
+        assert_eq!(n, 2);
+        let accounts = vault.accounts().unwrap();
+        assert_eq!(accounts.len(), 2);
+        assert_eq!(accounts[0].email, "user@example.com");
+        assert_eq!(accounts[1].email, "user@example.com");
+        let mut issuers: Vec<_> = accounts.iter().map(|a| a.issuer.as_str()).collect();
+        issuers.sort();
+        assert_eq!(issuers, ["Google", "OpenAI"]);
+    }
+
+    #[test]
+    fn import_skips_duplicate_issuer_and_secret() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut vault = Vault::new(dir.path().join("vault.enc"));
+        vault.setup("correct horse", "correct horse").unwrap();
+        vault
+            .add_many(vec![qr_account(
+                "Google",
+                "user@example.com",
+                "JBSWY3DPEHPK3PXP",
+            )])
+            .unwrap();
+        let n = vault
+            .add_many(vec![qr_account(
+                "Google",
+                "user@example.com",
+                "JBSWY3DPEHPK3PXP",
+            )])
+            .unwrap();
+        assert_eq!(n, 0);
+        assert_eq!(vault.accounts().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn import_splits_issuer_prefix_and_fills_email() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut vault = Vault::new(dir.path().join("vault.enc"));
+        vault.setup("correct horse", "correct horse").unwrap();
+        vault
+            .add_many(vec![qr_account(
+                "",
+                "OpenAI:user@example.com",
+                "JBSWY3DPEHPK3PXP",
+            )])
+            .unwrap();
+        let a = &vault.accounts().unwrap()[0];
+        assert_eq!(a.issuer, "OpenAI");
+        assert_eq!(a.name, "user@example.com");
+        assert_eq!(a.email, "user@example.com");
     }
 }

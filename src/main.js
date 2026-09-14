@@ -42,6 +42,25 @@ function avatarStyle(name) {
   const h = hue(name)
   return `background:linear-gradient(180deg,hsl(${h} 42% 46%),hsl(${h} 48% 32%))`
 }
+function avatarSource(a) {
+  return String(a.name || '').trim() || accountEmail(a) || String(a.issuer || '').trim() || '?'
+}
+function avatarInitial(a) {
+  const src = avatarSource(a)
+  const ch = [...src][0] || '?'
+  return ch.toUpperCase()
+}
+
+function looksLikeEmail(s) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(s || '').trim())
+}
+
+function accountEmail(a) {
+  const email = String(a.email || '').trim()
+  if (email) return email
+  const name = String(a.name || '').trim()
+  return looksLikeEmail(name) ? name : ''
+}
 
 function groups(accounts) {
   const q = state.q.trim().toLowerCase()
@@ -75,17 +94,27 @@ function paintList() {
         const shown = state.shown.has(a.id)
         const danger = Number(state.remains[a.id] || a.period || 30) <= 5
         const code = shown ? fmt(state.codes[a.id] || '') : (a.digits === 8 ? '•••• ••••' : '••• •••')
-        const sub = [a.email, a.notes].filter(Boolean).join(' · ')
-        return `<div class="row ${shown ? 'shown' : ''} ${danger && shown ? 'danger' : ''}" data-id="${a.id}">
-          <div class="avatar" style="${avatarStyle(a.issuer || a.name)}">${esc((a.issuer || a.name || '?')[0])}</div>
+        const email = accountEmail(a)
+        const rawName = String(a.name || '').trim()
+        const title = (email && rawName === email) ? (a.issuer || rawName) : (rawName || a.issuer || '未命名')
+        const showEmailRow = !!email
+        const showTitle = title && title !== email
+        const notes = String(a.notes || '').trim()
+        return `<div class="row ${shown ? 'shown' : ''} ${danger && shown ? 'danger' : ''} ${showEmailRow ? 'has-email' : ''} ${showEmailRow && notes ? 'has-notes' : ''}" data-id="${a.id}" data-email="${esc(email)}">
+          <div class="avatar" style="${avatarStyle(avatarSource(a))}">${esc(avatarInitial(a))}</div>
           <div class="meta">
-            <div class="name">${esc(a.name || a.issuer || '未命名')}</div>
-            ${sub ? `<div class="note">${esc(sub)}</div>` : ''}
+            ${showTitle || !showEmailRow ? `<div class="name">${esc(showTitle ? title : (title || '未命名'))}</div>` : ''}
+            ${notes && !showEmailRow ? `<div class="note">${esc(notes)}</div>` : ''}
           </div>
           <div class="code-wrap" data-act="toggle"><div class="code">${code}</div></div>
-          <button class="copy" type="button" data-act="copy">${COPY}</button>
+          <button class="copy" type="button" data-act="copy" title="复制验证码">${COPY}</button>
           <button class="edit" type="button" data-act="edit">${EDIT}</button>
           <button class="del" type="button" data-act="del">${DEL}</button>
+          ${showEmailRow ? `<div class="email-line" data-act="copy-email">
+            <span class="email">${esc(email)}</span>
+            <button class="copy-email" type="button" data-act="copy-email" title="复制邮箱">${COPY}</button>
+          </div>` : ''}
+          ${showEmailRow && notes ? `<div class="note-line">${esc(notes)}</div>` : ''}
         </div>`
       }).join('')}
       </div>
@@ -113,11 +142,21 @@ async function refresh() {
   paintList()
 }
 
+async function copyEmail(email, btn) {
+  if (!email) return
+  await navigator.clipboard.writeText(email)
+  if (!btn) return
+  const prev = btn.innerHTML
+  btn.innerHTML = OK
+  setTimeout(() => { btn.innerHTML = prev }, 900)
+}
+
 async function copyCode(id, btn) {
   const code = state.codes[id]
-  if (!code) return
+  if (!code || !btn) return
   await navigator.clipboard.writeText(code)
   const row = btn.closest('.row')
+  if (!row) return
   row.classList.add('copied')
   btn.innerHTML = OK
   setTimeout(() => { row.classList.remove('copied'); btn.innerHTML = COPY }, 900)
@@ -833,7 +872,15 @@ $('list').addEventListener('click', async (e) => {
     askDelete(acc)
     return
   }
-  copyCode(id, e.target.closest('.copy') || row.querySelector('.copy'))
+  if (act === 'copy-email') {
+    try {
+      await copyEmail(row.dataset.email || '', e.target.closest('button') || row.querySelector('.copy-email'))
+    } catch (_) {}
+    return
+  }
+  try {
+    await copyCode(id, e.target.closest('button.copy') || row.querySelector('.copy'))
+  } catch (_) {}
 })
 
 window.addEventListener('DOMContentLoaded', () => {
