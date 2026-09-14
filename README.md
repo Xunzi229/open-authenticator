@@ -1,6 +1,6 @@
 # 验证器
 
-本地加密的跨平台 TOTP 客户端，基于 Rust + [Tauri 2](https://tauri.app/)。使用系统 WebView，不内嵌 Chromium。
+本地加密的跨平台 TOTP 客户端，基于 Rust + [Tauri 2](https://tauri.app/)。
 
 [![CI](https://github.com/Xunzi229/open-authenticator/actions/workflows/ci.yml/badge.svg)](https://github.com/Xunzi229/open-authenticator/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/Xunzi229/open-authenticator)](https://github.com/Xunzi229/open-authenticator/releases/latest)
