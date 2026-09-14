@@ -255,6 +255,17 @@ button { font: inherit; cursor: pointer; }
 .grid-2 label { margin-bottom: 0; }
 .block .hint { margin: 8px 0 0; }
 .block .err { margin: 8px 0 0; min-height: 16px; }
+.bio-status {
+  display: flex; align-items: center; gap: 8px;
+  margin: 0 0 2px; font-size: 15px;
+}
+.bio-status .bio-dot {
+  width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+}
+.bio-status.on { color: var(--ok); }
+.bio-status.on .bio-dot { background: var(--ok); box-shadow: 0 0 0 4px rgba(48, 209, 88, .18); }
+.bio-status.off { color: var(--muted); }
+.bio-status.off .bio-dot { background: #636366; }
 button:disabled { opacity: .5; cursor: default; }
 .row-btns { display: flex; gap: 8px; margin-top: 10px; }
 .row-btns.tight { margin-top: 8px; }

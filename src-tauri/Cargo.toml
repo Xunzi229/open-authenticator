@@ -1,6 +1,6 @@
 [package]
 name = "authenticator"
-version = "1.0.2"
+version = "1.0.3"
 description = "Encrypted cross-platform TOTP authenticator"
 authors = ["local"]
 edition = "2021"
@@ -45,6 +45,7 @@ opt-level = "s"
 strip = true
 
 [target.'cfg(windows)'.dependencies]
+keyring = { version = "3", features = ["windows-native"] }
 windows = { version = "0.61", features = [
   "Foundation",
   "Security_Credentials_UI",
@@ -54,6 +55,18 @@ windows = { version = "0.61", features = [
   "Win32_UI_WindowsAndMessaging",
 ] }
 windows-future = "0.2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3", features = ["apple-native"] }
+block2 = "0.6"
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["NSError", "NSString"] }
+objc2-local-authentication = { version = "0.3", default-features = false, features = [
+  "std",
+  "block2",
+  "LAContext",
+  "LAError",
+] }
 
 [dev-dependencies]
 tempfile = "3"

@@ -621,11 +621,15 @@ function renderSettings(s) {
     <p class="sec-title">系统解锁</p>
     <section class="block">
       ${bio.available ? `
-        <p class="hint">${bio.enabled ? '已开启。锁定后可用指纹 / Windows Hello 解锁，查看二维码和更改密钥也可指纹验证。' : '开启后可用 Windows Hello 或指纹解锁，以及二次验证。'}</p>
+        <div class="bio-status ${bio.enabled ? 'on' : 'off'}">
+          <span class="bio-dot" aria-hidden="true"></span>
+          <strong>${bio.enabled ? '已开启' : '未开启'}</strong>
+        </div>
+        <p class="hint">${bio.enabled ? '锁定后可用指纹解锁，查看二维码和更改密钥也可指纹验证。' : '开启后可用 Touch ID 或 Windows Hello 解锁，以及二次验证。'}</p>
         ${bio.enabled
           ? '<div class="row-btns tight"><button type="button" class="ghost" id="btn-bio-off">关闭指纹解锁</button></div>'
-          : `${field('bio-pw', '主密码', '', 'type="password" autocomplete="current-password"')}<div class="row-btns tight"><button type="button" id="btn-bio-on">开启指纹解锁</button></div>`}
-      ` : '<p class="hint">当前设备没有可用的指纹或 Windows Hello。</p>'}
+          : `${field('bio-pw', '主密码', '', 'type="password" autocomplete="current-password"')}<div class="row-btns tight"><button type="button" class="primary" id="btn-bio-on">开启指纹解锁</button></div>`}
+      ` : '<p class="hint">当前设备没有可用的指纹、Touch ID 或 Windows Hello。</p>'}
     </section>
     <p class="sec-title">WebDAV 同步</p>
     <section class="block">
@@ -657,6 +661,19 @@ function renderSettings(s) {
     </div>`)
   $('sheet').querySelector('[data-close]').onclick = closeModal
   const val = (name) => $('sheet').querySelector('[name="' + name + '"]').value
+  const snapshotForm = () => ({
+    ...state.settings,
+    autolock_seconds: Number(val('autolock_seconds') || 0),
+    clipboard_clear_seconds: Number(val('clipboard_clear_seconds') || 0),
+    webdav_url: val('webdav_url'),
+    webdav_user: val('webdav_user'),
+    webdav_path: val('webdav_path'),
+  })
+  const refreshBioSection = (message) => {
+    renderSettings(snapshotForm())
+    $('form-err').classList.add('ok')
+    $('form-err').textContent = message
+  }
   const saveSet = () => call('save_settings', { data: {
     webdav_url: val('webdav_url'),
     webdav_user: val('webdav_user'),
@@ -719,9 +736,11 @@ function renderSettings(s) {
     $('form-err').classList.remove('ok')
     try {
       await call('bio_enable', { password: val('bio-pw') })
-      bio.enabled = true
-      $('form-err').classList.add('ok')
-      $('form-err').textContent = '已开启指纹解锁'
+      const b = await call('bio_status')
+      bio.available = !!b.available
+      bio.enabled = !!b.enabled
+      if (!bio.enabled) throw new Error('指纹凭据未能保存')
+      refreshBioSection('已开启指纹解锁')
     } catch (e) { $('form-err').textContent = e.message }
   }
   const bioOff = $('btn-bio-off')
@@ -729,9 +748,10 @@ function renderSettings(s) {
     $('form-err').classList.remove('ok')
     try {
       await call('bio_disable')
-      bio.enabled = false
-      $('form-err').classList.add('ok')
-      $('form-err').textContent = '已关闭指纹解锁'
+      const b = await call('bio_status')
+      bio.available = !!b.available
+      bio.enabled = !!b.enabled
+      refreshBioSection('已关闭指纹解锁')
     } catch (e) { $('form-err').textContent = e.message }
   }
 }
@@ -771,7 +791,6 @@ async function showGate() {
   $('pw1').value = ''
   $('pw2').value = ''
   $('gate-err').textContent = ''
-  if (!isSetup && bio.available && bio.enabled) tryBioUnlock()
 }
 
 async function tryBioUnlock() {
@@ -792,7 +811,14 @@ $('gate-form').addEventListener('submit', async (e) => {
   } catch (err) { $('gate-err').textContent = err.message }
 })
 
-$('btn-lock').onclick = async () => { await call('lock'); await showGate() }
+$('btn-lock').onclick = async () => {
+  try {
+    await call('lock')
+  } catch (e) {
+    $('gate-err').textContent = e.message
+  }
+  await showGate()
+}
 $('btn-bio').onclick = () => tryBioUnlock()
 $('btn-add').onclick = () => openEditor(null)
 $('btn-io').onclick = openTransfer

@@ -464,9 +464,9 @@ fn change_password(
     let old = Zeroizing::new(old);
     let new_password = Zeroizing::new(new_password);
     let confirm = Zeroizing::new(confirm);
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     let mut old_bio = bio::stored_password()?;
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     let mut old_bio: Option<String> = None;
     if old_bio.is_some() {
         bio::store(&new_password)?;
@@ -618,6 +618,9 @@ fn bio_enable(
     }
     bio::prompt(window_hwnd(&window), "开启指纹解锁")?;
     bio::store(&password)?;
+    if !bio::enabled() {
+        return Err("指纹凭据未能保存，请重试".into());
+    }
     ok(json!({ "enabled": true }))
 }
 
