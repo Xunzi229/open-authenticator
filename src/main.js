@@ -29,7 +29,17 @@ async function call(name, args = {}) {
   }
 }
 
+const THEME_KEY = 'oa-theme'
 const $ = (id) => document.getElementById(id)
+function currentTheme() {
+  return localStorage.getItem(THEME_KEY) === 'light' ? 'light' : 'dark'
+}
+function applyTheme(theme) {
+  const t = theme === 'light' ? 'light' : 'dark'
+  document.documentElement.dataset.theme = t
+  try { localStorage.setItem(THEME_KEY, t) } catch (_) {}
+  try { currentWindow()?.setTheme?.(t)?.catch?.(() => {}) } catch (_) {}
+}
 const esc = (s) => String(s || '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
 const fmt = (code) => {
   const s = String(code || '')
@@ -634,9 +644,25 @@ function openSettings() {
   }).catch(() => {}).finally(() => renderSettings(s))
 }
 
+function bindThemeSeg() {
+  const theme = currentTheme()
+  $('sheet')?.querySelectorAll('#theme-seg [data-theme]').forEach((btn) => {
+    btn.classList.toggle('on', btn.dataset.theme === theme)
+    btn.onclick = () => {
+      applyTheme(btn.dataset.theme)
+      bindThemeSeg()
+    }
+  })
+}
+
 function renderSettings(s) {
   openModal(`
     <h2>设置</h2>
+    <p class="sec-title">外观</p>
+    <div class="seg" id="theme-seg">
+      <button type="button" data-theme="dark"${currentTheme() === 'dark' ? ' class="on"' : ''}>深色</button>
+      <button type="button" data-theme="light"${currentTheme() === 'light' ? ' class="on"' : ''}>浅色</button>
+    </div>
     <p class="sec-title">常规</p>
     <section class="block">
       <div class="grid-2">
@@ -686,6 +712,7 @@ function renderSettings(s) {
       <button type="button" class="primary" id="btn-save-set">保存设置</button>
     </div>`)
   $('sheet').querySelector('[data-close]').onclick = closeModal
+  bindThemeSeg()
   const val = (name) => $('sheet').querySelector('[name="' + name + '"]').value
   const snapshotForm = () => ({
     ...state.settings,
@@ -961,6 +988,7 @@ $('list').addEventListener('click', async (e) => {
 })
 
 window.addEventListener('DOMContentLoaded', () => {
+  applyTheme(currentTheme())
   const boot = () => showGate().catch((e) => { $('gate-err').textContent = e.message })
   if (window.__TAURI__) boot()
   else setTimeout(boot, 80)
