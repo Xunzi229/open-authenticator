@@ -399,16 +399,8 @@ fn export_data(
 }
 
 #[tauri::command]
-fn account_qr(
-    window: WebviewWindow,
-    state: State<AppState>,
-    id: String,
-    password: String,
-    biometric: bool,
-) -> Result<Value, String> {
-    let pw = resolve_password(&window, password, biometric, "验证身份以查看账号二维码")?;
+fn account_qr(state: State<AppState>, id: String) -> Result<Value, String> {
     let mut v = state.vault.lock().map_err(|e| e.to_string())?;
-    v.verify_password(&pw)?;
     let acc = v.get(&id)?;
     let q = to_qr(&acc);
     let uri = qr::otpauth_uri(&q);

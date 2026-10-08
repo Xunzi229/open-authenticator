@@ -431,11 +431,10 @@ function openEditor(acc) {
   if (del) del.onclick = () => askDelete(acc)
   const showQr = $('btn-show-qr')
   if (showQr) showQr.onclick = async () => {
-    const res = await askAuth('查看二维码需要验证主密码', (password, biometric) =>
-      call('account_qr', { id: acc.id, password, biometric })
-    )
-    if (!res) return
-    showAccountQr(res.svg)
+    try {
+      const res = await call('account_qr', { id: acc.id })
+      showAccountQr(res.svg)
+    } catch (e) { $('form-err').textContent = e.message }
   }
 }
 
@@ -678,7 +677,7 @@ function renderSettings(s) {
           <span class="bio-dot" aria-hidden="true"></span>
           <strong>${bio.enabled ? '已开启' : '未开启'}</strong>
         </div>
-        <p class="hint">${bio.enabled ? '锁定后可用指纹解锁，查看二维码和更改密钥也可指纹验证。' : '开启后可用 Touch ID 或 Windows Hello 解锁，以及二次验证。'}</p>
+        <p class="hint">${bio.enabled ? '锁定后可用指纹解锁，导出二维码和更改密钥也可指纹验证。' : '开启后可用 Touch ID 或 Windows Hello 解锁，以及二次验证。'}</p>
         ${bio.enabled
           ? '<div class="row-btns tight"><button type="button" class="ghost" id="btn-bio-off">关闭指纹解锁</button></div>'
           : `${field('bio-pw', '主密码', '', 'type="password" autocomplete="current-password"', { id: 'btn-bio-on', title: '开启指纹解锁', icon: ICON_GO })}`}
@@ -705,6 +704,7 @@ function renderSettings(s) {
       ${field('old', '当前密码', '', 'type="password"')}
       ${field('newpw', '新密码', '', 'type="password"')}
       ${field('new2', '确认新密码', '', 'type="password"', { id: 'btn-pw', title: '更新主密码', icon: ICON_GO })}
+      <p class="hint">填写后会随设置一起保存，新密码至少 8 位。</p>
     </section>
     <p class="err" id="form-err"></p>
     <div class="row-btns sheet-actions">
@@ -741,12 +741,26 @@ function renderSettings(s) {
     el.className = kind === 'ok' ? 'err ok' : kind === 'busy' ? 'hint' : 'err'
     el.textContent = text
   }
+  const passwordFields = () => ['old', 'newpw', 'new2'].map((name) => $('sheet').querySelector('[name="' + name + '"]'))
+  const clearPasswordFields = () => {
+    for (const el of passwordFields()) {
+      el.value = ''
+      el.dispatchEvent(new Event('input', { bubbles: true }))
+    }
+  }
   $('btn-save-set').onclick = async () => {
+    $('form-err').classList.remove('ok')
+    const [oldEl, newEl, confirmEl] = passwordFields()
+    const changing = [oldEl, newEl, confirmEl].some((el) => el.value.length > 0)
     try {
+      if (changing) {
+        await call('change_password', { old: oldEl.value, newPassword: newEl.value, confirm: confirmEl.value })
+      }
       await saveSet()
       await refresh()
+      if (changing) clearPasswordFields()
       $('form-err').classList.add('ok')
-      $('form-err').textContent = '设置已保存'
+      $('form-err').textContent = changing ? '设置和主密码已保存' : '设置已保存'
     } catch (e) {
       $('form-err').classList.remove('ok')
       $('form-err').textContent = e.message
@@ -781,8 +795,16 @@ function renderSettings(s) {
     }, '已从远程覆盖本地')
   }
   const updatePassword = async () => {
-    try { await call('change_password', { old: val('old'), newPassword: val('newpw'), confirm: val('new2') }); $('form-err').textContent = '主密码已更新' }
-    catch (e) { $('form-err').textContent = e.message }
+    $('form-err').classList.remove('ok')
+    try {
+      await call('change_password', { old: val('old'), newPassword: val('newpw'), confirm: val('new2') })
+      clearPasswordFields()
+      $('form-err').classList.add('ok')
+      $('form-err').textContent = '主密码已更新'
+    } catch (e) {
+      $('form-err').classList.remove('ok')
+      $('form-err').textContent = e.message
+    }
   }
   $('btn-pw').onclick = updatePassword
   bindPwGo($('sheet').querySelector('[name="new2"]'), $('btn-pw'), [
