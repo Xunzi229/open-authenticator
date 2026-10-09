@@ -1,4 +1,21 @@
 // All inputs are physical desktop pixels. Work areas can have negative origins.
+
+/// Size left after removing the invisible frame around a shadow window.
+pub fn visible_size(outer: (f64, f64), insets: (f64, f64, f64, f64)) -> (f64, f64) {
+    (
+        (outer.0 - insets.0 - insets.2).max(1.0),
+        (outer.1 - insets.1 - insets.3).max(1.0),
+    )
+}
+
+/// Outer top-left for a visible origin. Windows keeps the shadow inside the window rect.
+pub fn outer_origin(visible_x: f64, visible_y: f64, inset_left: f64, inset_top: f64) -> (i32, i32) {
+    (
+        (visible_x - inset_left).round() as i32,
+        (visible_y - inset_top).round() as i32,
+    )
+}
+
 pub fn below_tray(
     tray: (f64, f64, f64, f64),
     window: (f64, f64),
@@ -50,6 +67,18 @@ mod tests {
             ),
             (-1914, -170)
         );
+    }
+
+    #[test]
+    fn shadow_frame_does_not_leave_a_gap_above_the_work_area() {
+        let insets = (8.0, 0.0, 8.0, 12.0);
+        let visible = super::visible_size((456.0, 800.0), insets);
+        let work = (0.0, 0.0, 1920.0, 1040.0);
+        let (x, y) = super::below_tray((1800.0, 1040.0, 40.0, 40.0), visible, work, 6.0);
+        let (outer_x, outer_y) = super::outer_origin(x as f64, y as f64, insets.0, insets.1);
+        let visible_bottom = outer_y as f64 + insets.1 + visible.1;
+        assert_eq!((outer_x, outer_y), (x - 8, y));
+        assert_eq!(visible_bottom, work.1 + work.3 - 6.0);
     }
 
     #[test]

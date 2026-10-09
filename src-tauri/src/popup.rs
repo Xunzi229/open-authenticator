@@ -1,7 +1,7 @@
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use tauri::{AppHandle, LogicalPosition, Manager, Monitor, Position, Rect, WebviewWindow};
+use tauri::{AppHandle, Manager, Monitor, PhysicalPosition, Position, Rect, WebviewWindow};
 
 use crate::tray_position;
 
@@ -248,11 +248,37 @@ fn tray_anchor(window: &WebviewWindow) -> Option<(f64, f64, f64, f64)> {
         .and_then(anchor_from_rect)
 }
 
+fn frame_insets(window: &WebviewWindow) -> (f64, f64, f64, f64) {
+    let Ok(outer_size) = window.outer_size() else {
+        return (0.0, 0.0, 0.0, 0.0);
+    };
+    let Ok(inner_size) = window.inner_size() else {
+        return (0.0, 0.0, 0.0, 0.0);
+    };
+    let Ok(outer_pos) = window.outer_position() else {
+        return (0.0, 0.0, 0.0, 0.0);
+    };
+    let Ok(inner_pos) = window.inner_position() else {
+        return (0.0, 0.0, 0.0, 0.0);
+    };
+    let left = (inner_pos.x - outer_pos.x) as f64;
+    let top = (inner_pos.y - outer_pos.y) as f64;
+    let right = outer_size.width as f64 - inner_size.width as f64 - left;
+    let bottom = outer_size.height as f64 - inner_size.height as f64 - top;
+    (left.max(0.0), top.max(0.0), right.max(0.0), bottom.max(0.0))
+}
+
+fn place_visible(window: &WebviewWindow, x: f64, y: f64, insets: (f64, f64, f64, f64)) -> bool {
+    let (outer_x, outer_y) = tray_position::outer_origin(x, y, insets.0, insets.1);
+    window
+        .set_position(Position::Physical(PhysicalPosition::new(outer_x, outer_y)))
+        .is_ok()
+}
+
 fn position_window_below_tray(window: &WebviewWindow) -> bool {
     let Some((origin_x, origin_y, tray_width, tray_height)) = tray_anchor(window) else {
         return false;
     };
-    let scale = window.scale_factor().unwrap_or(1.0);
     let Some(monitor) = monitor_containing(
         window,
         origin_x + tray_width / 2.0,
@@ -263,13 +289,15 @@ fn position_window_below_tray(window: &WebviewWindow) -> bool {
     let Ok(window_size) = window.outer_size() else {
         return false;
     };
+    let insets = frame_insets(window);
+    let visible = tray_position::visible_size(
+        (window_size.width as f64, window_size.height as f64),
+        insets,
+    );
     let area = monitor.work_area();
     let (x, y) = tray_position::below_tray(
         (origin_x, origin_y, tray_width, tray_height),
-        (
-            window_size.width as f64 / scale * monitor.scale_factor(),
-            window_size.height as f64 / scale * monitor.scale_factor(),
-        ),
+        visible,
         (
             area.position.x as f64,
             area.position.y as f64,
@@ -278,40 +306,31 @@ fn position_window_below_tray(window: &WebviewWindow) -> bool {
         ),
         6.0 * monitor.scale_factor(),
     );
-    let monitor_scale = monitor.scale_factor();
-    window
-        .set_position(Position::Logical(LogicalPosition::new(
-            x as f64 / monitor_scale,
-            y as f64 / monitor_scale,
-        )))
-        .is_ok()
+    place_visible(window, x as f64, y as f64, insets)
 }
 
 fn position_window_bottom_right(window: &WebviewWindow, fallback_width: i32, fallback_height: i32) {
     let Ok(Some(monitor)) = window.primary_monitor() else {
         return;
     };
-    let monitor_scale = monitor.scale_factor();
+    let scale = monitor.scale_factor();
     let work_area = monitor.work_area();
-    let work_x = work_area.position.x as f64 / monitor_scale;
-    let work_y = work_area.position.y as f64 / monitor_scale;
-    let work_width = work_area.size.width as f64 / monitor_scale;
-    let work_height = work_area.size.height as f64 / monitor_scale;
-    let window_scale = window.scale_factor().unwrap_or(1.0);
-    let window_size = window
+    let insets = frame_insets(window);
+    let visible = window
         .outer_size()
         .ok()
-        .map(|size| {
-            (
-                size.width as f64 / window_scale,
-                size.height as f64 / window_scale,
-            )
-        })
-        .unwrap_or((fallback_width as f64, fallback_height as f64));
-    let x = work_x + work_width - window_size.0 - WINDOW_MARGIN as f64;
-    let y = work_y + work_height - window_size.1 - WINDOW_MARGIN as f64;
-    let _ = window.set_position(Position::Logical(LogicalPosition::new(
-        x.max(work_x),
-        y.max(work_y),
-    )));
+        .map(|size| tray_position::visible_size((size.width as f64, size.height as f64), insets))
+        .unwrap_or((
+            fallback_width as f64 * scale,
+            fallback_height as f64 * scale,
+        ));
+    let margin = WINDOW_MARGIN as f64 * scale;
+    let x = work_area.position.x as f64 + work_area.size.width as f64 - visible.0 - margin;
+    let y = work_area.position.y as f64 + work_area.size.height as f64 - visible.1 - margin;
+    let _ = place_visible(
+        window,
+        x.max(work_area.position.x as f64),
+        y.max(work_area.position.y as f64),
+        insets,
+    );
 }
