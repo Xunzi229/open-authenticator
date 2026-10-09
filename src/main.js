@@ -155,6 +155,7 @@ async function refresh() {
   state.codes = snap.codes || {}
   state.remains = snap.remains || {}
   state.settings = snap.settings || {}
+  $('btn-lock').classList.toggle('hidden', !!state.settings.passwordless)
   paintRing()
   paintList()
 }
@@ -669,6 +670,8 @@ function renderSettings(s) {
         ${field('clipboard_clear_seconds', '清空剪贴板（秒）', s.clipboard_clear_seconds, 'type="number" min="0" max="86400"')}
       </div>
       <p class="hint">填 0 表示关闭该项。</p>
+      <label class="check"><input type="checkbox" name="passwordless"${s.passwordless ? ' checked' : ''} /> 无需密码进入</label>
+      <p class="hint">开启后打开直接进入，并暂停自动锁定。主密码仍用于加密。</p>
     </section>
     <p class="sec-title">系统解锁</p>
     <section class="block">
@@ -721,6 +724,7 @@ function renderSettings(s) {
     webdav_url: val('webdav_url'),
     webdav_user: val('webdav_user'),
     webdav_path: val('webdav_path'),
+    passwordless: $('sheet').querySelector('[name="passwordless"]').checked,
   })
   const refreshBioSection = (message) => {
     renderSettings(snapshotForm())
@@ -735,6 +739,7 @@ function renderSettings(s) {
     autolock_seconds: Number(val('autolock_seconds') || 0),
     clipboard_clear_seconds: Number(val('clipboard_clear_seconds') || 0),
     clear_webdav_password: $('sheet').querySelector('[name="clear_webdav_password"]').checked,
+    passwordless: $('sheet').querySelector('[name="passwordless"]').checked,
   }})
   const davMsg = (text, kind) => {
     const el = $('dav-err')
@@ -855,6 +860,20 @@ async function showApp() {
 
 async function showGate() {
   if (timer) clearInterval(timer)
+  const st = await call('status')
+  isSetup = !st.exists
+  bio.available = !!st.bio_available
+  bio.enabled = !!st.bio_enabled
+  let openError = ''
+  if (!isSetup && st.passwordless) {
+    try {
+      await call('unlock_passwordless')
+      await showApp()
+      return
+    } catch (e) {
+      openError = e.message
+    }
+  }
   $('app').classList.add('hidden')
   $('gate').classList.remove('hidden')
   closeModal()
@@ -864,10 +883,6 @@ async function showGate() {
   state.shown.clear()
   state.export = null
   $('list').replaceChildren()
-  const st = await call('status')
-  isSetup = !st.exists
-  bio.available = !!st.bio_available
-  bio.enabled = !!st.bio_enabled
   $('gate-sub').textContent = isSetup ? '首次使用，请设置主密码（至少 8 位）' : (bio.enabled ? '指纹或主密码解锁' : '输入主密码解锁')
   const gateTitle = isSetup ? '创建保险库' : '解锁'
   $('gate-btn').title = gateTitle
@@ -877,7 +892,7 @@ async function showGate() {
   $('btn-bio').classList.toggle('hidden', isSetup || !bio.available || !bio.enabled)
   $('pw1').value = ''
   $('pw2').value = ''
-  $('gate-err').textContent = ''
+  $('gate-err').textContent = openError
   syncGateAction()
 }
 

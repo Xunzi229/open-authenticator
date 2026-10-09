@@ -20,8 +20,14 @@
         "minWidth": 380,
         "minHeight": 640,
         "resizable": true,
+        "visible": false,
         "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "acceptFirstMouse": true,
         "shadow": true,
+        "center": false,
         "theme": "Dark"
       }
     ],

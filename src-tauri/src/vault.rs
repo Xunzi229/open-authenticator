@@ -92,6 +92,7 @@ pub struct Vault {
     payload: Option<Payload>,
     fail: u32,
     last_active: Option<Instant>,
+    skip_autolock: bool,
 }
 
 impl Vault {
@@ -102,7 +103,12 @@ impl Vault {
             payload: None,
             fail: 0,
             last_active: None,
+            skip_autolock: false,
         }
+    }
+
+    pub fn set_autolock_suspended(&mut self, suspended: bool) {
+        self.skip_autolock = suspended;
     }
 
     pub fn default_path() -> PathBuf {
@@ -159,7 +165,7 @@ impl Vault {
             .as_ref()
             .map(|p| p.settings.autolock_seconds)
             .unwrap_or(0);
-        if idle > 0 {
+        if !self.skip_autolock && idle > 0 {
             if let Some(t) = self.last_active {
                 if t.elapsed() > Duration::from_secs(idle) {
                     self.lock();
@@ -798,6 +804,20 @@ mod tests {
         vault.last_active = Some(Instant::now() - Duration::from_secs(11));
         assert!(vault.accounts().is_err());
         assert!(!vault.unlocked());
+    }
+
+    #[test]
+    fn suspended_auto_lock_keeps_vault_open() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut vault = Vault::new(dir.path().join("vault.enc"));
+        vault.setup("correct horse", "correct horse").unwrap();
+        let mut settings = vault.settings().unwrap();
+        settings.autolock_seconds = 10;
+        vault.update_settings(settings, true).unwrap();
+        vault.set_autolock_suspended(true);
+        vault.last_active = Some(Instant::now() - Duration::from_secs(11));
+        assert!(vault.accounts().is_ok());
+        assert!(vault.unlocked());
     }
 
     #[test]

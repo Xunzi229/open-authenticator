@@ -75,6 +75,14 @@ html, body {
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  border-radius: 16px;
+}
+label.check {
+  display: flex; align-items: center; gap: 8px;
+  color: var(--text); font-size: 13px;
+}
+label.check input {
+  width: 16px; height: 16px; margin: 0; flex: 0 0 auto;
 }
 .hidden { display: none !important; }
 .screen { flex: 1; min-height: 0; }

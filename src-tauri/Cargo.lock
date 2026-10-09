@@ -270,13 +270,16 @@ dependencies = [
  "block2",
  "data-encoding",
  "dirs",
+ "dispatch2",
  "hex",
  "hmac",
  "image",
  "keyring",
  "objc2",
+ "objc2-app-kit",
  "objc2-foundation",
  "objc2-local-authentication",
+ "objc2-quartz-core",
  "percent-encoding",
  "qrcode",
  "rand 0.8.8",
@@ -2513,6 +2516,7 @@ dependencies = [
  "objc2",
  "objc2-core-foundation",
  "objc2-foundation",
+ "objc2-quartz-core",
 ]
 
 [[package]]

@@ -1,7 +1,10 @@
 mod bio;
 mod crypto;
+mod passwordless;
+mod popup;
 mod qr;
 mod totp;
+mod tray_position;
 mod vault;
 mod webdav;
 
@@ -22,11 +25,11 @@ use zeroize::{Zeroize, Zeroizing};
 static QUITTING: AtomicBool = AtomicBool::new(false);
 
 fn show_main(app: &tauri::AppHandle) {
-    if let Some(win) = app.get_webview_window("main") {
-        let _ = win.unminimize();
-        let _ = win.show();
-        let _ = win.set_focus();
-    }
+    popup::show_main(app);
+}
+
+fn sync_autolock(vault: &mut Vault) {
+    vault.set_autolock_suspended(passwordless::enabled());
 }
 
 fn quit_app(app: &tauri::AppHandle) {
@@ -56,10 +59,11 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
             if let TrayIconEvent::Click {
                 button: MouseButton::Left,
                 button_state: MouseButtonState::Up,
+                rect,
                 ..
             } = event
             {
-                show_main(tray.app_handle());
+                popup::toggle_main(tray.app_handle(), popup::anchor_from_rect(&rect));
             }
         })
         .build(app)?;
@@ -126,7 +130,8 @@ fn status(state: State<AppState>) -> Result<Value, String> {
         "unlocked": v.unlocked(),
         "min_password": MIN_PASSWORD,
         "bio_available": bio::available(),
-        "bio_enabled": bio::enabled()
+        "bio_enabled": bio::enabled(),
+        "passwordless": passwordless::enabled()
     }))
 }
 
@@ -145,11 +150,9 @@ fn setup(state: State<AppState>, password: String, confirm: String) -> Result<Va
 #[tauri::command]
 fn unlock(state: State<AppState>, password: String) -> Result<Value, String> {
     let password = Zeroizing::new(password);
-    state
-        .vault
-        .lock()
-        .map_err(|e| e.to_string())?
-        .unlock(&password)?;
+    let mut vault = state.vault.lock().map_err(|e| e.to_string())?;
+    vault.unlock(&password)?;
+    sync_autolock(&mut vault);
     ok(json!({}))
 }
 
@@ -200,7 +203,8 @@ fn snapshot(state: State<AppState>) -> Result<Value, String> {
             "webdav_path": settings.webdav_path,
             "webdav_has_password": !settings.webdav_password.is_empty(),
             "autolock_seconds": settings.autolock_seconds,
-            "clipboard_clear_seconds": settings.clipboard_clear_seconds
+            "clipboard_clear_seconds": settings.clipboard_clear_seconds,
+            "passwordless": passwordless::enabled()
         }
     }))
 }
@@ -416,6 +420,7 @@ struct SettingsIn {
     autolock_seconds: Option<u64>,
     clipboard_clear_seconds: Option<u64>,
     clear_webdav_password: Option<bool>,
+    passwordless: Option<bool>,
 }
 
 #[tauri::command]
@@ -443,6 +448,15 @@ fn save_settings(state: State<AppState>, data: SettingsIn) -> Result<Value, Stri
         s.clipboard_clear_seconds = x;
     }
     v.update_settings(s, !data.clear_webdav_password.unwrap_or(false))?;
+    if let Some(on) = data.passwordless {
+        if on {
+            let pw = v.password().ok_or_else(|| "已锁定".to_string())?;
+            passwordless::store(&pw)?;
+        } else {
+            passwordless::clear()?;
+        }
+        v.set_autolock_suspended(on);
+    }
     ok(json!({}))
 }
 
@@ -460,8 +474,17 @@ fn change_password(
     let mut old_bio = bio::stored_password()?;
     #[cfg(not(any(windows, target_os = "macos")))]
     let mut old_bio: Option<String> = None;
+    let mut old_open = passwordless::stored_password()?;
     if old_bio.is_some() {
         bio::store(&new_password)?;
+    }
+    if old_open.is_some() {
+        if let Err(error) = passwordless::store(&new_password) {
+            if let Some(password) = old_bio.as_deref() {
+                let _ = bio::store(password);
+            }
+            return Err(error);
+        }
     }
     if let Err(error) = state
         .vault
@@ -473,12 +496,22 @@ fn change_password(
             bio::store(password)
                 .map_err(|rollback| format!("{error}；恢复系统凭据失败：{rollback}"))?;
         }
+        if let Some(password) = old_open.as_deref() {
+            passwordless::store(password)
+                .map_err(|rollback| format!("{error}；恢复免密凭据失败：{rollback}"))?;
+        }
         if let Some(password) = old_bio.as_mut() {
+            password.zeroize();
+        }
+        if let Some(password) = old_open.as_mut() {
             password.zeroize();
         }
         return Err(error);
     }
     if let Some(password) = old_bio.as_mut() {
+        password.zeroize();
+    }
+    if let Some(password) = old_open.as_mut() {
         password.zeroize();
     }
     ok(json!({}))
@@ -586,6 +619,9 @@ async fn webdav_download(state: State<'_, AppState>, password: String) -> Result
         .lock()
         .map_err(|e| e.to_string())?
         .replace_bytes(&download.bytes, &pw, &download.etag)?;
+    if passwordless::enabled() {
+        passwordless::store(&pw)?;
+    }
     ok(json!({}))
 }
 
@@ -625,39 +661,58 @@ fn bio_disable() -> Result<Value, String> {
 #[tauri::command]
 fn unlock_bio(window: WebviewWindow, state: State<AppState>) -> Result<Value, String> {
     let pw = bio_password(&window, "解锁验证器")?;
-    state.vault.lock().map_err(|e| e.to_string())?.unlock(&pw)?;
+    let mut vault = state.vault.lock().map_err(|e| e.to_string())?;
+    vault.unlock(&pw)?;
+    sync_autolock(&mut vault);
+    ok(json!({}))
+}
+
+#[tauri::command]
+fn unlock_passwordless(state: State<AppState>) -> Result<Value, String> {
+    let pw = passwordless::take()?;
+    let mut vault = state.vault.lock().map_err(|e| e.to_string())?;
+    vault.unlock(&pw)?;
+    sync_autolock(&mut vault);
     ok(json!({}))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let mut app = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             show_main(app);
         }))
         .manage(AppState {
             vault: Mutex::new(Vault::new(Vault::default_path())),
         })
+        .manage(popup::PopupState::new())
         .setup(|app| {
             setup_tray(app)?;
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.hide();
+            }
             let handle = app.handle().clone();
             std::thread::spawn(move || {
                 while !QUITTING.load(Ordering::Relaxed) {
                     std::thread::sleep(std::time::Duration::from_secs(1));
                     if let Ok(mut vault) = handle.state::<AppState>().vault.lock() {
+                        vault.set_autolock_suspended(passwordless::enabled());
                         vault.check_timeout();
                     }
                 }
             });
             Ok(())
         })
-        .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+        .on_window_event(|window, event| match event {
+            tauri::WindowEvent::CloseRequested { api, .. } => {
                 if !QUITTING.load(Ordering::Relaxed) {
                     api.prevent_close();
+                    popup::note_hidden(window.app_handle());
                     let _ = window.hide();
                 }
             }
+            tauri::WindowEvent::Focused(focused) => popup::handle_focus(window, *focused),
+            _ => {}
         })
         .invoke_handler(tauri::generate_handler![
             status,
@@ -683,10 +738,17 @@ pub fn run() {
             bio_status,
             bio_enable,
             bio_disable,
-            unlock_bio
+            unlock_bio,
+            unlock_passwordless
         ])
-        .run(tauri::generate_context!())
+        .build(tauri::generate_context!())
         .expect("error while running tauri application");
+
+    // 必须在 run 之前改成菜单栏应用，弹出窗口才会出现在当前空间的图标下方。
+    #[cfg(target_os = "macos")]
+    app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+
+    app.run(|_, _| {});
 }
 
 #[cfg(test)]

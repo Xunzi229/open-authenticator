@@ -60,7 +60,10 @@ windows-future = "0.2"
 keyring = { version = "3", features = ["apple-native"] }
 block2 = "0.6"
 objc2 = "0.6"
-objc2-foundation = { version = "0.3", default-features = false, features = ["NSError", "NSString"] }
+dispatch2 = "0.3"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSRunningApplication", "NSWindow", "NSView", "NSColor", "objc2-quartz-core"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["NSError", "NSString", "NSValue"] }
+objc2-quartz-core = { version = "0.3", default-features = false, features = ["CALayer", "objc2-core-foundation"] }
 objc2-local-authentication = { version = "0.3", default-features = false, features = [
   "std",
   "block2",
