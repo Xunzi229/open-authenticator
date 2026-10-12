@@ -50,6 +50,25 @@ function hue(s) {
   for (const c of String(s || '')) h = (h * 33 + c.charCodeAt(0)) >>> 0
   return h % 360
 }
+const EMAIL_COLORS = [
+  ['#5ac8fa', '#0369a1'],
+  ['#32d74b', '#15803d'],
+  ['#ffd60a', '#a16207'],
+  ['#ff9f0a', '#c2410c'],
+  ['#ff6482', '#be123c'],
+  ['#bf5af2', '#7e22ce'],
+  ['#64b5ff', '#1d4ed8'],
+  ['#5eead4', '#0f766e'],
+  ['#ffb340', '#b45309'],
+  ['#ff6961', '#b91c1c'],
+  ['#a5b4fc', '#4338ca'],
+  ['#a3e635', '#3f6212'],
+]
+function emailTone(email) {
+  let h = 0
+  for (const c of String(email || '').toLowerCase()) h = (h * 33 + c.charCodeAt(0)) >>> 0
+  return EMAIL_COLORS[h % EMAIL_COLORS.length]
+}
 function avatarStyle(name) {
   const h = hue(name)
   return `background:linear-gradient(180deg,hsl(${h} 42% 46%),hsl(${h} 48% 32%))`
@@ -117,6 +136,7 @@ function paintList() {
         const showEmailRow = !!email
         const showTitle = title && title !== email
         const notes = String(a.notes || '').trim()
+        const [emailDark, emailLight] = showEmailRow ? emailTone(email) : ['', '']
         return `<div class="row ${shown ? 'shown' : ''} ${danger && shown ? 'danger' : ''} ${showEmailRow ? 'has-email' : ''} ${showEmailRow && notes ? 'has-notes' : ''}" data-id="${a.id}" data-email="${esc(email)}">
           <div class="avatar" style="${avatarStyle(avatarSource(a))}">${esc(avatarInitial(a))}</div>
           <div class="meta">
@@ -128,7 +148,7 @@ function paintList() {
           <button class="edit" type="button" data-act="edit">${EDIT}</button>
           <button class="del" type="button" data-act="del">${DEL}</button>
           ${showEmailRow ? `<div class="email-line" data-act="copy-email">
-            <span class="email">${esc(email)}</span>
+            <span class="email" style="--ed:${emailDark};--el:${emailLight}">${esc(email)}</span>
             <button class="copy-email" type="button" data-act="copy-email" title="复制邮箱">${COPY}</button>
           </div>` : ''}
           ${showEmailRow && notes ? `<div class="note-line">${esc(notes)}</div>` : ''}

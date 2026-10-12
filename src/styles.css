@@ -263,9 +263,11 @@ button { font: inherit; cursor: pointer; }
 .note-line { grid-column: 2 / -1; grid-row: 3; }
 .email {
   flex: 1; min-width: 0;
-  font-size: 12px; color: var(--muted); line-height: 1.4;
+  font-size: 13px; font-weight: 560; line-height: 1.4;
+  color: var(--ed, var(--text));
   overflow-wrap: break-word; word-break: break-all;
 }
+html[data-theme="light"] .email { color: var(--el, var(--text)); }
 .code-wrap { grid-column: 3; grid-row: 1; min-width: 96px; text-align: right; border-radius: 8px; padding: 4px 2px; }
 .code-wrap:hover { background: var(--hover-strong); }
 .code {
