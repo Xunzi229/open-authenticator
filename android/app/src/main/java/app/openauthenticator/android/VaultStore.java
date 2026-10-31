@@ -14,12 +14,16 @@ import java.util.Arrays;
 
 final class VaultStore {
     private final File file;
+    private final android.content.SharedPreferences deviceUnlock;
     private JSONObject payload;
     private String password;
     private long activeAt;
     private int failures;
 
-    VaultStore(Context context) { file = new File(context.getFilesDir(), "vault.enc"); }
+    VaultStore(Context context) {
+        file = new File(context.getFilesDir(), "vault.enc");
+        deviceUnlock = context.getSharedPreferences("device_unlock", Context.MODE_PRIVATE);
+    }
     boolean exists() { return file.isFile() && file.length() > 0; }
     boolean unlocked() { return payload != null && password != null; }
     void lock() { payload = null; password = null; }
@@ -34,7 +38,7 @@ final class VaultStore {
     void checkTimeout() {
         if (!unlocked()) throw new IllegalStateException("保险库已锁定");
         long seconds = settings().optLong("autolock_seconds", 180);
-        if (seconds > 0 && System.currentTimeMillis() - activeAt > seconds * 1000) {
+        if (!deviceUnlock.contains("direct") && seconds > 0 && System.currentTimeMillis() - activeAt > seconds * 1000) {
             lock(); throw new IllegalStateException("保险库已自动锁定");
         }
     }
@@ -55,6 +59,12 @@ final class VaultStore {
             JSONObject decoded = VaultCodec.decrypt(Files.readAllBytes(file.toPath()), candidate);
             payload = decoded; password = candidate; failures = 0; touch();
         } catch (Exception error) { failures++; throw error; }
+    }
+
+    void verifyPassword(String candidate) throws Exception {
+        if (!exists()) throw new IllegalStateException("还没有保险库");
+        try { VaultCodec.decrypt(Files.readAllBytes(file.toPath()), candidate); }
+        catch (Exception error) { throw new IllegalArgumentException("当前主密码错误"); }
     }
 
     JSONObject data() { checkLock(); return payload; }

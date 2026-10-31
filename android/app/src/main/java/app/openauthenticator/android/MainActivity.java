@@ -1,6 +1,5 @@
 package app.openauthenticator.android;
 
-import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.ClipData;
 import android.content.ClipboardManager;
@@ -14,16 +13,24 @@ import android.os.Handler;
 import android.os.Looper;
 import android.text.InputType;
 import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.View;
-import android.view.ViewGroup;
 import android.view.WindowManager;
 import android.widget.Button;
+import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
+
+import androidx.biometric.BiometricPrompt;
+import androidx.biometric.BiometricManager;
+import androidx.core.content.ContextCompat;
+import androidx.fragment.app.FragmentActivity;
+
+import javax.crypto.Cipher;
 
 import com.google.zxing.integration.android.IntentIntegrator;
 import com.google.zxing.integration.android.IntentResult;
@@ -42,21 +49,42 @@ import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-public final class MainActivity extends Activity {
+public final class MainActivity extends FragmentActivity {
     private static final int PICK_IMAGE = 1, PICK_TEXT = 2, SAVE_TEXT = 3;
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private final Handler handler = new Handler(Looper.getMainLooper());
     private VaultStore store;
+    private DeviceUnlock deviceUnlock;
     private LinearLayout root, body;
     private EditText search;
+    private UiStyle style;
+    private UiStyle.CountdownRing countdown;
+    private final List<TextView> codeViews = new ArrayList<>();
+    private final Set<String> revealed = new HashSet<>();
+    private boolean settingsOpen;
+    private SettingsDraft settingsDraft;
+    private EditText settingsUrl, settingsUser, settingsPass, settingsPath, settingsLock, settingsClip;
+    private CheckBox settingsClearPass;
+    private String query = "";
+
+    private static final class SettingsDraft {
+        String url, user, pass, path, lock, clip;
+        boolean clearPass;
+    }
     private String exportText;
     private String lastCopied;
     private boolean foreground;
+    private boolean autoUnlockInProgress;
+    private boolean showCodesByDefault;
 
     interface Task { void run() throws Exception; }
 
@@ -64,16 +92,45 @@ public final class MainActivity extends Activity {
         super.onCreate(state);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
         store = new VaultStore(this);
-        root = new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL); root.setPadding(dp(18), dp(16), dp(18), dp(12)); root.setBackgroundColor(0xfff6f8fa);
+        deviceUnlock = new DeviceUnlock(this);
+        style = new UiStyle(getPreferences(MODE_PRIVATE).getBoolean("dark_theme", false));
+        showCodesByDefault = getPreferences(MODE_PRIVATE).getBoolean("show_codes_by_default", false);
+        root = new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL);
         setContentView(root);
+        autoUnlockInProgress = store.exists() && deviceUnlock.directEnabled();
         render();
+        if (autoUnlockInProgress) {
+            worker.submit(() -> {
+                try {
+                    store.unlock(deviceUnlock.directPassword());
+                    runOnUiThread(() -> { autoUnlockInProgress = false; render(); handleIntent(getIntent()); });
+                } catch (Exception error) {
+                    deviceUnlock.disableDirect();
+                    runOnUiThread(() -> {
+                        autoUnlockInProgress = false; render();
+                        toast("免密码凭据已失效，请用主密码解锁");
+                    });
+                }
+            });
+        }
         handler.postDelayed(this::tick, 1000);
     }
 
     @Override protected void onResume() { super.onResume(); foreground = true; render(); handleIntent(getIntent()); }
-    @Override protected void onPause() { foreground = false; super.onPause(); }
+    @Override protected void onPause() { if (settingsOpen) captureSettingsDraft(); foreground = false; super.onPause(); }
     @Override protected void onDestroy() { store.lock(); worker.shutdownNow(); super.onDestroy(); }
     @Override protected void onNewIntent(Intent intent) { super.onNewIntent(intent); setIntent(intent); handleIntent(intent); }
+    @Override public boolean dispatchTouchEvent(MotionEvent event) {
+        if (event.getActionMasked() == MotionEvent.ACTION_DOWN && store != null && store.unlocked()) {
+            try { store.checkTimeout(); store.touch(); }
+            catch (Exception error) { render(); return true; }
+        }
+        return super.dispatchTouchEvent(event);
+    }
+    @Override public void onBackPressed() {
+        if (settingsOpen) { settingsOpen = false; settingsDraft = null; render(); }
+        else super.onBackPressed();
+    }
 
     private void handleIntent(Intent intent) {
         if (intent == null || intent.getData() == null || !store.unlocked()) return;
@@ -89,22 +146,60 @@ public final class MainActivity extends Activity {
     }
 
     private int dp(int value) { return Math.round(value * getResources().getDisplayMetrics().density); }
+    private void applyWindowColors() {
+        root.setBackgroundColor(style.bg);
+        getWindow().setStatusBarColor(style.bg);
+        getWindow().setNavigationBarColor(style.bg);
+        getWindow().getDecorView().setSystemUiVisibility(style.dark ? 0 : View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
+    }
     private void toast(String message) { Toast.makeText(this, message, Toast.LENGTH_LONG).show(); }
+    private AlertDialog.Builder dialog() {
+        return new AlertDialog.Builder(this, style.dark
+                ? android.R.style.Theme_Material_Dialog_Alert
+                : android.R.style.Theme_Material_Light_Dialog_Alert);
+    }
     private void showSaveResult(String message) {
         if (message.contains("同步失败") || message.contains("同步标记保存失败")) {
-            new AlertDialog.Builder(this).setTitle("本地已保存").setMessage(message).setPositiveButton("知道了", null).show();
+            dialog().setTitle("本地已保存").setMessage(message).setPositiveButton("知道了", null).show();
         } else toast(message);
     }
     private TextView text(String value, int size, boolean bold) {
-        TextView view = new TextView(this); view.setText(value); view.setTextSize(size); view.setTextColor(0xff172332);
-        if (bold) view.setTypeface(null, Typeface.BOLD); view.setPadding(0, dp(6), 0, dp(6)); return view;
+        TextView view = new TextView(this); view.setText(value); view.setTextSize(size); view.setTextColor(style.text);
+        if (bold) view.setTypeface(null, Typeface.BOLD); return view;
     }
     private Button button(String label, Runnable action) {
-        Button b = new Button(this); b.setText(label); b.setAllCaps(false); b.setOnClickListener(v -> action.run()); return b;
+        Button b = new Button(this); b.setText(label); b.setTextSize(14); b.setAllCaps(false); b.setTextColor(style.text);
+        b.setBackground(UiStyle.rounded(style.fill, this, 10)); b.setMinHeight(dp(44)); b.setElevation(0);
+        b.setOnClickListener(v -> action.run()); return b;
+    }
+    private Button primaryButton(String label, Runnable action) {
+        Button b = button(label, action); b.setTextColor(Color.WHITE); b.setTypeface(null, Typeface.BOLD);
+        b.setBackground(UiStyle.rounded(style.accent, this, 11)); return b;
+    }
+    private UiStyle.IconButton iconButton(String kind, String description, boolean filled, Runnable action) {
+        return new UiStyle.IconButton(this, style, kind, description, filled, action);
+    }
+    private void icon(LinearLayout parent, String kind, String description, boolean filled, Runnable action, int size) {
+        UiStyle.IconButton view = iconButton(kind, description, filled, action);
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(size), dp(size)); params.leftMargin = dp(7);
+        parent.addView(view, params);
     }
     private EditText input(String hint, String value, boolean secret) {
-        EditText field = new EditText(this); field.setSingleLine(true); field.setText(value); field.setHint(hint); field.setTextSize(16);
+        EditText field = new EditText(this); field.setSingleLine(true); field.setText(value); field.setHint(hint); field.setTextSize(15);
         if (secret) field.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        field.setTextColor(style.text); field.setHintTextColor(style.muted);
+        field.setBackground(UiStyle.rounded(style.fill, this, 10));
+        field.setPadding(dp(13), dp(10), dp(13), dp(10)); field.setMinHeight(dp(46));
+        field.addTextChangedListener(new android.text.TextWatcher() {
+            public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+            public void onTextChanged(CharSequence s, int start, int before, int count) {
+                if (store != null && store.unlocked()) {
+                    try { store.checkTimeout(); store.touch(); }
+                    catch (Exception error) { render(); }
+                }
+            }
+            public void afterTextChanged(android.text.Editable value) {}
+        });
         return field;
     }
     private EditText multiline(String hint, String value) {
@@ -114,78 +209,211 @@ public final class MainActivity extends Activity {
     private LinearLayout row() { LinearLayout r = new LinearLayout(this); r.setOrientation(LinearLayout.HORIZONTAL); r.setGravity(Gravity.CENTER_VERTICAL); return r; }
     private void add(LinearLayout parent, View child) { parent.addView(child, new LinearLayout.LayoutParams(-1, -2)); }
     private void equal(LinearLayout parent, View child) { parent.addView(child, new LinearLayout.LayoutParams(0, -2, 1)); }
+    private void gap(LinearLayout parent, int height) { View space = new View(this); parent.addView(space, new LinearLayout.LayoutParams(1, dp(height))); }
+    private TextView muted(String value, int size) { TextView view = text(value, size, false); view.setTextColor(style.muted); return view; }
+    private TextView sectionTitle(String value) {
+        TextView title = muted(value, 12); title.setTypeface(null, Typeface.BOLD); title.setLetterSpacing(.05f);
+        title.setPadding(dp(4), dp(17), 0, dp(7)); return title;
+    }
+    private LinearLayout sectionCard(LinearLayout parent) {
+        LinearLayout card = column(); card.setPadding(dp(14), dp(14), dp(14), dp(14));
+        card.setBackground(UiStyle.rounded(style.surface, this, 13)); add(parent, card); return card;
+    }
+    private EditText labeledField(LinearLayout parent, String label, String hint, String value, boolean secret) {
+        TextView title = muted(label, 12); title.setPadding(0, 0, 0, dp(6)); add(parent, title);
+        EditText field = input(hint, value, secret); add(parent, field); gap(parent, 12); return field;
+    }
 
     private void render() {
         root.removeAllViews();
-        if (!store.exists()) { authScreen(true); return; }
-        if (!store.unlocked()) { authScreen(false); return; }
-        try { store.checkLock(); } catch (Exception error) { authScreen(false); return; }
+        root.setPadding(dp(16), dp(14), dp(16), dp(12)); applyWindowColors();
+        codeViews.clear(); countdown = null; body = null;
+        if (autoUnlockInProgress) { unlockingScreen(); return; }
+        if (!settingsOpen) {
+            settingsUrl = null; settingsUser = null; settingsPass = null; settingsPath = null;
+            settingsLock = null; settingsClip = null; settingsClearPass = null;
+        }
+        if (!store.exists()) { settingsOpen = false; settingsDraft = null; authScreen(true); return; }
+        if (!store.unlocked()) { settingsOpen = false; settingsDraft = null; revealed.clear(); authScreen(false); return; }
+        try { store.checkLock(); } catch (Exception error) { settingsOpen = false; settingsDraft = null; revealed.clear(); authScreen(false); return; }
+        if (settingsOpen) { renderSettingsPage(); return; }
+        renderHome();
+    }
+
+    private void unlockingScreen() {
+        LinearLayout content = column(); content.setGravity(Gravity.CENTER);
+        TextView title = text("验证器", 24, true); title.setGravity(Gravity.CENTER); add(content, title); gap(content, 8);
+        TextView hint = muted("正在解锁保险库…", 13); hint.setGravity(Gravity.CENTER); add(content, hint);
+        root.addView(content, new LinearLayout.LayoutParams(-1, 0, 1));
+    }
+
+    private void renderHome() {
         LinearLayout header = row();
-        TextView title = text("验证器", 26, true); equal(header, title);
-        header.addView(button("扫码", this::scan));
-        header.addView(button("＋", () -> editAccount(null)));
-        header.addView(button("⋮", this::menu));
-        add(root, header);
-        search = input("搜索账号", "", false); search.addTextChangedListener(new android.text.TextWatcher() {
+        LinearLayout titleBlock = column();
+        add(titleBlock, text("验证码", 28, true));
+        TextView subtitle = muted(showCodesByDefault ? "点验证码复制 · 也可复制邮箱" : "点验证码显示 · 复制验证码或邮箱", 12);
+        subtitle.setPadding(0, dp(3), 0, 0); add(titleBlock, subtitle);
+        equal(header, titleBlock);
+        countdown = new UiStyle.CountdownRing(this, style);
+        header.addView(countdown, new LinearLayout.LayoutParams(dp(36), dp(36)));
+        countdown.update(); add(root, header); gap(root, 17);
+
+        LinearLayout toolbar = row();
+        LinearLayout searchBox = row(); searchBox.setPadding(dp(8), 0, dp(8), 0);
+        searchBox.setBackground(UiStyle.rounded(style.fill, this, 10));
+        searchBox.addView(iconButton("search", "搜索", false, () -> search.requestFocus()), new LinearLayout.LayoutParams(dp(25), dp(38)));
+        search = input("搜索", query, false); search.setBackgroundColor(Color.TRANSPARENT);
+        search.setPadding(dp(5), 0, 0, 0); search.setTextSize(15);
+        searchBox.addView(search, new LinearLayout.LayoutParams(0, dp(40), 1));
+        toolbar.addView(searchBox, new LinearLayout.LayoutParams(0, dp(40), 1));
+        icon(toolbar, "scan", "扫码添加", true, this::scan, 40);
+        icon(toolbar, "plus", "手动添加", true, () -> editAccount(null), 40);
+        icon(toolbar, "upload", "导入导出", true, this::menu, 40);
+        icon(toolbar, "settings", "设置", true, this::settingsDialog, 40);
+        add(root, toolbar); gap(root, 12);
+
+        ScrollView scroll = new ScrollView(this); scroll.setFillViewport(true);
+        scroll.setVerticalScrollBarEnabled(false);
+        body = column(); body.setPadding(0, 0, 0, dp(24)); scroll.addView(body);
+        root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
+        search.addTextChangedListener(new android.text.TextWatcher() {
             public void beforeTextChanged(CharSequence s, int st, int c, int a) {}
-            public void onTextChanged(CharSequence s, int st, int before, int count) { fillAccounts(s.toString()); }
+            public void onTextChanged(CharSequence s, int st, int before, int count) { query = s.toString(); fillAccounts(query); }
             public void afterTextChanged(android.text.Editable e) {}
         });
-        add(root, search);
-        ScrollView scroll = new ScrollView(this); body = column(); scroll.addView(body); root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
-        fillAccounts("");
+        fillAccounts(query);
     }
 
     private void authScreen(boolean setup) {
-        add(root, text(setup ? "创建加密保险库" : "解锁验证器", 26, true));
-        add(root, text(setup ? "主密码至少 8 位。请妥善保管，无法找回。" : "输入主密码以查看验证码。", 14, false));
-        EditText password = input("主密码", "", true); add(root, password);
+        ScrollView scroll = new ScrollView(this); scroll.setFillViewport(true);
+        LinearLayout content = column(); content.setGravity(Gravity.CENTER_VERTICAL); content.setPadding(dp(12), 0, dp(12), dp(20));
+        scroll.addView(content); root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
+        LinearLayout card = sectionCard(content); card.setPadding(dp(22), dp(24), dp(22), dp(22));
+        TextView mark = text("验", 23, true); mark.setTextColor(Color.WHITE); mark.setGravity(Gravity.CENTER);
+        mark.setBackground(UiStyle.rounded(style.accent, this, 14));
+        LinearLayout markRow = row(); markRow.setGravity(Gravity.CENTER);
+        markRow.addView(mark, new LinearLayout.LayoutParams(dp(54), dp(54))); add(card, markRow); gap(card, 14);
+        TextView title = text(setup ? "创建加密保险库" : "验证器", 22, true); title.setGravity(Gravity.CENTER); add(card, title);
+        TextView subtitle = muted(setup ? "设置至少 8 位的主密码" : "输入主密码解锁", 13); subtitle.setGravity(Gravity.CENTER);
+        add(card, subtitle); gap(card, 20);
+        EditText password = labeledField(card, setup ? "新主密码" : "主密码", "请输入主密码", "", true);
         EditText confirm = null;
-        if (setup) { confirm = input("再次输入主密码", "", true); add(root, confirm); }
+        if (setup) confirm = labeledField(card, "确认密码", "再次输入主密码", "", true);
         EditText finalConfirm = confirm;
-        add(root, button(setup ? "创建" : "解锁", () -> {
+        add(card, primaryButton(setup ? "创建保险库" : "解锁", () -> {
             String pass = password.getText().toString();
             if (setup && !pass.equals(finalConfirm.getText().toString())) { toast("两次密码不一致"); return; }
             run(() -> { if (setup) store.setup(pass); else store.unlock(pass); }, () -> { render(); handleIntent(getIntent()); });
         }));
-        if (setup) add(root, button("从 WebDAV 恢复", this::restoreDialog));
+        if (!setup && deviceUnlock.biometricEnabled()) {
+            gap(card, 10);
+            add(card, button("使用指纹解锁", this::unlockWithBiometric));
+        }
+        if (setup) { gap(card, 10); add(card, button("从 WebDAV 恢复", this::restoreDialog)); }
     }
 
     private void fillAccounts(String query) {
         if (body == null || !store.unlocked()) return;
-        body.removeAllViews();
+        body.removeAllViews(); codeViews.clear();
         try {
-            JSONArray accounts = store.accounts(); int shown = 0;
+            JSONArray accounts = store.accounts();
+            Map<String, List<JSONObject>> groups = new LinkedHashMap<>();
             for (int i = 0; i < accounts.length(); i++) {
                 JSONObject a = accounts.getJSONObject(i);
                 String label = a.optString("issuer") + " " + a.optString("name") + " " + a.optString("email") + " " + a.optString("notes");
                 if (!label.toLowerCase(Locale.ROOT).contains(query.toLowerCase(Locale.ROOT).trim())) continue;
-                shown++;
-                LinearLayout card = column(); card.setPadding(dp(12), dp(8), dp(12), dp(8));
-                card.setBackgroundColor(Color.WHITE);
-                LinearLayout.LayoutParams cardParams = new LinearLayout.LayoutParams(-1, -2); cardParams.setMargins(0, dp(6), 0, dp(6)); body.addView(card, cardParams);
-                add(card, text(a.optString("issuer").isEmpty() ? "其他" : a.optString("issuer"), 14, false));
-                add(card, text(a.optString("name"), 18, true));
-                if (!a.optString("email").isEmpty() && !a.optString("email").equals(a.optString("name")))
-                    add(card, text(a.optString("email"), 14, false));
-                TextView code = text(a.optInt("digits") == 8 ? "•••• ••••" : "••• •••", 28, true); code.setTag(a); add(card, code);
-                code.setOnClickListener(v -> {
-                    if (code.getText().toString().contains("•")) showCode(code, a);
-                    else {
-                        try {
-                            String value = Totp.code(a.getString("secret"), a.getString("algorithm"), a.getInt("digits"), a.getLong("period"), System.currentTimeMillis() / 1000);
-                            copy(value, "验证码", store.settings().optLong("clipboard_clear_seconds", 30)); toast("已复制验证码");
-                        } catch (Exception error) { toast(error.getMessage()); }
-                    }
-                });
-                LinearLayout actions = row(); equal(actions, button("编辑", () -> editAccount(a))); equal(actions, button("二维码", () -> showQr(a)));
-                equal(actions, button("删除", () -> confirmDelete(a))); add(card, actions);
+                String issuer = a.optString("issuer").isEmpty() ? "其他" : a.optString("issuer");
+                groups.computeIfAbsent(issuer, ignored -> new ArrayList<>()).add(a);
             }
-            if (shown == 0) {
-                add(body, text("暂无账号，可扫码或点击＋添加。", 16, false));
-                add(body, button("扫码添加账号", this::scan));
+            for (Map.Entry<String, List<JSONObject>> group : groups.entrySet()) {
+                add(body, sectionTitle(group.getKey().toUpperCase(Locale.ROOT)));
+                LinearLayout card = column(); card.setBackground(UiStyle.rounded(style.surface, this, 13));
+                card.setClipToOutline(true); add(body, card);
+                List<JSONObject> items = group.getValue();
+                for (int i = 0; i < items.size(); i++) {
+                    add(card, accountRow(items.get(i)));
+                    if (i < items.size() - 1) {
+                        View divider = new View(this); divider.setBackgroundColor(style.line);
+                        LinearLayout.LayoutParams line = new LinearLayout.LayoutParams(-1, dp(1)); line.leftMargin = dp(12); card.addView(divider, line);
+                    }
+                }
+            }
+            if (groups.isEmpty()) {
+                gap(body, 45);
+                LinearLayout empty = sectionCard(body); empty.setPadding(dp(22), dp(24), dp(22), dp(24));
+                boolean hasAccounts = accounts.length() > 0;
+                TextView title = text(hasAccounts ? "没有匹配账号" : "还没有账号", 17, true);
+                title.setGravity(Gravity.CENTER); add(empty, title); gap(empty, 6);
+                TextView hint = muted(hasAccounts ? "换个关键词试试" : "扫码或手动添加 TOTP 账号", 13);
+                hint.setGravity(Gravity.CENTER); add(empty, hint);
+                gap(empty, 18);
+                add(empty, primaryButton(hasAccounts ? "清除搜索" : "扫码添加", hasAccounts ? () -> search.setText("") : this::scan));
             }
         } catch (Exception error) { toast("无法显示账号"); }
+    }
+
+    private LinearLayout accountRow(JSONObject a) {
+        LinearLayout item = column(); item.setPadding(dp(12), dp(12), dp(10), dp(8));
+        LinearLayout top = row();
+        String issuer = a.optString("issuer"), name = a.optString("name"), email = a.optString("email");
+        String title = !email.isEmpty() && email.equals(name) ? (issuer.isEmpty() ? name : issuer) : (name.isEmpty() ? issuer : name);
+        if (title.isEmpty()) title = "未命名";
+        TextView avatar = text(title.substring(0, 1).toUpperCase(Locale.ROOT), 14, true);
+        avatar.setTextColor(Color.WHITE); avatar.setGravity(Gravity.CENTER);
+        avatar.setBackground(UiStyle.avatar(this, Math.floorMod(title.hashCode(), 360)));
+        top.addView(avatar, new LinearLayout.LayoutParams(dp(36), dp(36)));
+        LinearLayout meta = column(); meta.setPadding(dp(9), 0, dp(2), 0);
+        TextView nameView = text(title, 15, true); nameView.setSingleLine(true);
+        nameView.setEllipsize(android.text.TextUtils.TruncateAt.END); add(meta, nameView);
+        if (!email.isEmpty()) {
+            TextView emailView = text(email, 12, false); emailView.setSingleLine(true);
+            emailView.setEllipsize(android.text.TextUtils.TruncateAt.END); emailView.setTextColor(emailColor(email));
+            emailView.setOnClickListener(v -> { copy(email, "邮箱", store.settings().optLong("clipboard_clear_seconds", 30)); toast("已复制邮箱"); });
+            add(meta, emailView);
+        }
+        top.addView(meta, new LinearLayout.LayoutParams(0, -2, 1));
+        TextView code = text(a.optInt("digits") == 8 ? "•••• ••••" : "••• •••", 18, true);
+        code.setTypeface(Typeface.MONOSPACE, Typeface.BOLD); code.setTextColor(style.hidden);
+        code.setGravity(Gravity.CENTER); code.setPadding(dp(4), dp(6), dp(2), dp(6)); code.setTag(a);
+        code.setContentDescription(showCodesByDefault ? "验证码，点击复制" : "点按显示验证码");
+        code.setOnClickListener(v -> {
+            if (showCodesByDefault || !revealed.add(a.optString("id"))) copyCode(a);
+            else showCode(code, a);
+        });
+        if (showCodesByDefault || revealed.contains(a.optString("id"))) showCode(code, a);
+        top.addView(code, new LinearLayout.LayoutParams(-2, -2)); codeViews.add(code);
+        add(item, top);
+        LinearLayout actions = row(); actions.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
+        String notes = a.optString("notes");
+        if (!notes.isEmpty()) {
+            TextView noteView = muted(notes, 11); noteView.setSingleLine(true);
+            noteView.setEllipsize(android.text.TextUtils.TruncateAt.END);
+            actions.addView(noteView, new LinearLayout.LayoutParams(0, -2, 1));
+        } else {
+            View spacer = new View(this); actions.addView(spacer, new LinearLayout.LayoutParams(0, 1, 1));
+        }
+        icon(actions, "copy", "复制验证码", false, () -> copyCode(a), 30);
+        icon(actions, "qr", "账号二维码", false, () -> showQr(a), 30);
+        icon(actions, "edit", "编辑账号", false, () -> editAccount(a), 30);
+        icon(actions, "delete", "删除账号", false, () -> confirmDelete(a), 30);
+        add(item, actions);
+        return item;
+    }
+
+    private int emailColor(String email) {
+        int[] colors = style.dark
+                ? new int[]{0xff64b5ff, 0xffff9f0a, 0xff32d74b, 0xffff6482, 0xffbf5af2,
+                    0xff5ac8fa, 0xffffd60a, 0xff5eead4, 0xffff6961, 0xffa5b4fc}
+                : new int[]{0xff1d4ed8, 0xffc2410c, 0xff15803d, 0xffbe123c, 0xff7e22ce,
+                    0xff0369a1, 0xffa16207, 0xff0f766e, 0xffb91c1c, 0xff4338ca};
+        return colors[Math.floorMod(email.toLowerCase(Locale.ROOT).hashCode(), colors.length)];
+    }
+
+    private void copyCode(JSONObject a) {
+        try {
+            String value = Totp.code(a.getString("secret"), a.getString("algorithm"), a.getInt("digits"), a.getLong("period"), System.currentTimeMillis() / 1000);
+            copy(value, "验证码", store.settings().optLong("clipboard_clear_seconds", 30)); toast("已复制验证码");
+        } catch (Exception error) { toast(error.getMessage()); }
     }
 
     private void showCode(TextView view, JSONObject a) {
@@ -193,7 +421,8 @@ public final class MainActivity extends Activity {
             long now = System.currentTimeMillis() / 1000;
             String code = Totp.code(a.getString("secret"), a.getString("algorithm"), a.getInt("digits"), a.getLong("period"), now);
             String formatted = code.length() == 6 ? code.substring(0, 3) + " " + code.substring(3) : code.substring(0, 4) + " " + code.substring(4);
-            view.setText(formatted + "  ·  " + (a.getLong("period") - now % a.getLong("period")) + "s");
+            view.setText(formatted);
+            view.setTextColor(a.getLong("period") - now % a.getLong("period") <= 5 ? style.danger : style.text);
             view.setContentDescription("验证码，点击复制");
         } catch (Exception error) { toast(error.getMessage()); }
     }
@@ -202,15 +431,11 @@ public final class MainActivity extends Activity {
         if (foreground && store.unlocked()) {
             try {
                 store.checkTimeout();
-                if (body != null) {
-                    for (int i = 0; i < body.getChildCount(); i++) {
-                        View card = body.getChildAt(i);
-                        if (!(card instanceof ViewGroup)) continue;
-                        ViewGroup group = (ViewGroup) card;
-                        for (int j = 0; j < group.getChildCount(); j++) {
-                            View v = group.getChildAt(j);
-                            if (v instanceof TextView && v.getTag() instanceof JSONObject && !((TextView) v).getText().toString().contains("•")) showCode((TextView) v, (JSONObject) v.getTag());
-                        }
+                if (countdown != null) countdown.update();
+                for (TextView code : codeViews) {
+                    Object account = code.getTag();
+                    if (account instanceof JSONObject && (showCodesByDefault || revealed.contains(((JSONObject) account).optString("id")))) {
+                        showCode(code, (JSONObject) account);
                     }
                 }
             } catch (Exception error) { render(); }
@@ -219,18 +444,18 @@ public final class MainActivity extends Activity {
     }
 
     private void editAccount(JSONObject existing) {
-        LinearLayout form = column(); form.setPadding(dp(18), 0, dp(18), 0);
-        EditText issuer = input("发行方", existing == null ? "" : existing.optString("issuer"), false);
-        EditText name = input("名称或账号", existing == null ? "" : existing.optString("name"), false);
-        EditText email = input("邮箱", existing == null ? "" : existing.optString("email"), false);
-        EditText notes = input("备注", existing == null ? "" : existing.optString("notes"), false);
-        EditText secret = input("Base32 密钥", existing == null ? "" : existing.optString("secret"), false);
-        EditText algorithm = input("算法 SHA1 / SHA256 / SHA512", existing == null ? "SHA1" : existing.optString("algorithm"), false);
-        EditText digits = input("位数 6 / 8", existing == null ? "6" : String.valueOf(existing.optInt("digits")), false);
-        EditText period = input("周期（秒）", existing == null ? "30" : String.valueOf(existing.optLong("period")), false);
-        for (EditText field : new EditText[]{issuer, name, email, notes, secret, algorithm, digits, period}) add(form, field);
+        LinearLayout form = column(); form.setPadding(dp(18), dp(8), dp(18), dp(8));
+        EditText issuer = labeledField(form, "发行方", "例如 OpenAI", existing == null ? "" : existing.optString("issuer"), false);
+        EditText name = labeledField(form, "名称或账号", "账号名称", existing == null ? "" : existing.optString("name"), false);
+        EditText email = labeledField(form, "邮箱", "可选", existing == null ? "" : existing.optString("email"), false);
+        EditText notes = labeledField(form, "备注", "可选", existing == null ? "" : existing.optString("notes"), false);
+        EditText secret = labeledField(form, "Base32 密钥", "粘贴密钥", existing == null ? "" : existing.optString("secret"), false);
+        EditText algorithm = labeledField(form, "算法", "SHA1 / SHA256 / SHA512", existing == null ? "SHA1" : existing.optString("algorithm"), false);
+        EditText digits = labeledField(form, "验证码位数", "6 或 8", existing == null ? "6" : String.valueOf(existing.optInt("digits")), false);
+        EditText period = labeledField(form, "周期（秒）", "30", existing == null ? "30" : String.valueOf(existing.optLong("period")), false);
+        digits.setInputType(InputType.TYPE_CLASS_NUMBER); period.setInputType(InputType.TYPE_CLASS_NUMBER);
         ScrollView scroll = new ScrollView(this); scroll.addView(form);
-        new AlertDialog.Builder(this).setTitle(existing == null ? "添加账号" : "编辑账号").setView(scroll)
+        dialog().setTitle(existing == null ? "添加账号" : "编辑账号").setView(scroll)
                 .setNegativeButton("取消", null).setPositiveButton("保存", (dialog, which) -> {
                     String issuerValue = issuer.getText().toString(), nameValue = name.getText().toString();
                     String emailValue = email.getText().toString(), notesValue = notes.getText().toString();
@@ -250,13 +475,13 @@ public final class MainActivity extends Activity {
     }
 
     private void confirmDelete(JSONObject a) {
-        new AlertDialog.Builder(this).setTitle("删除账号？").setMessage(a.optString("issuer") + " " + a.optString("name"))
+        dialog().setTitle("删除账号？").setMessage(a.optString("issuer") + " " + a.optString("name"))
                 .setNegativeButton("取消", null).setPositiveButton("删除", (d, w) -> run(() -> store.delete(a.getString("id")), this::render)).show();
     }
 
     private void menu() {
-        String[] items = {"扫描二维码", "从图片导入", "粘贴链接或文本", "从文件导入", "导出备份", "WebDAV 设置与同步", "修改主密码", "锁定"};
-        new AlertDialog.Builder(this).setItems(items, (dialog, index) -> {
+        String[] items = {"扫描二维码", "从图片导入", "粘贴链接或文本", "从文件导入", "导出备份", "设置与同步", "锁定"};
+        dialog().setItems(items, (dialog, index) -> {
             switch (index) {
                 case 0: scan(); break;
                 case 1: pick("image/*", PICK_IMAGE); break;
@@ -264,20 +489,20 @@ public final class MainActivity extends Activity {
                 case 3: pick("*/*", PICK_TEXT); break;
                 case 4: exportDialog(); break;
                 case 5: settingsDialog(); break;
-                case 6: passwordDialog(); break;
-                case 7: store.lock(); render(); break;
+                case 6: store.lock(); render(); break;
             }
         }).show();
     }
 
     private void scan() {
-        new IntentIntegrator(this).setDesiredBarcodeFormats(IntentIntegrator.QR_CODE_TYPES)
-                .setPrompt("扫描验证器二维码").setBeepEnabled(false).initiateScan();
+        new IntentIntegrator(this).setCaptureActivity(PortraitScanActivity.class)
+                .setOrientationLocked(false).setDesiredBarcodeFormats(IntentIntegrator.QR_CODE)
+                .setPrompt("").setBeepEnabled(false).initiateScan();
     }
 
     private void importDialog() {
         EditText content = multiline("otpauth:// 链接、Google 转移链接或 JSON", "");
-        new AlertDialog.Builder(this).setTitle("导入账号").setView(content).setNegativeButton("取消", null)
+        dialog().setTitle("导入账号").setView(content).setNegativeButton("取消", null)
                 .setPositiveButton("导入", (d, w) -> importContent(content.getText().toString())).show();
     }
 
@@ -354,14 +579,14 @@ public final class MainActivity extends Activity {
             int[] pixels = new int[720 * 720]; for (int y = 0; y < 720; y++) for (int x = 0; x < 720; x++) pixels[y * 720 + x] = matrix.get(x, y) ? Color.BLACK : Color.WHITE;
             Bitmap bitmap = Bitmap.createBitmap(pixels, 720, 720, Bitmap.Config.ARGB_8888);
             ImageView image = new ImageView(this); image.setImageBitmap(bitmap); image.setPadding(dp(20), dp(20), dp(20), dp(20));
-            new AlertDialog.Builder(this).setTitle("账号二维码").setView(image).setNegativeButton("关闭", null)
+            dialog().setTitle("账号二维码").setView(image).setNegativeButton("关闭", null)
                     .setPositiveButton("复制链接", (d, w) -> copy(uri, "账号链接", 30)).show();
         } catch (Exception error) { toast(error.getMessage()); }
     }
 
     private void exportDialog() {
         EditText password = input("主密码", "", true);
-        new AlertDialog.Builder(this).setTitle("导出备份").setMessage("导出内容包含明文密钥，请妥善保管。")
+        dialog().setTitle("导出备份").setMessage("导出内容包含明文密钥，请妥善保管。")
                 .setView(password).setNegativeButton("取消", null).setPositiveButton("继续", (d, w) -> {
                     String candidate = password.getText().toString();
                     run(() -> {
@@ -391,45 +616,239 @@ public final class MainActivity extends Activity {
             catch (Exception ignored) {} }, Math.min(clearSeconds, 86400) * 1000);
     }
 
-    private void settingsDialog() {
-        JSONObject current = store.settings(); LinearLayout form = column(); form.setPadding(dp(18), 0, dp(18), 0);
-        EditText url = input("WebDAV 地址（HTTPS）", current.optString("webdav_url"), false);
-        EditText user = input("用户名", current.optString("webdav_user"), false);
-        EditText pass = input("应用密码，留空保持原值", "", true);
-        EditText path = input("远程路径", current.optString("webdav_path", "/authenticator/vault.enc"), false);
-        EditText lock = input("自动锁定秒数，0 为关闭", String.valueOf(current.optLong("autolock_seconds", 180)), false);
-        EditText clip = input("剪贴板清除秒数", String.valueOf(current.optLong("clipboard_clear_seconds", 30)), false);
-        for (EditText v : new EditText[]{url, user, pass, path, lock, clip}) add(form, v);
-        add(form, button("上传到 WebDAV", () -> saveSettings(url, user, pass, path, lock, clip, true)));
-        add(form, button("从 WebDAV 拉取", () -> saveSettings(url, user, pass, path, lock, clip, false)));
-        ScrollView scroll = new ScrollView(this); scroll.addView(form);
-        new AlertDialog.Builder(this).setTitle("设置与同步").setView(scroll).setNegativeButton("关闭", null)
-                .setPositiveButton("保存设置", (d, w) -> saveSettings(url, user, pass, path, lock, clip, null)).show();
+    private void askMasterPassword(String title, java.util.function.Consumer<String> action) {
+        EditText field = input("当前主密码", "", true);
+        LinearLayout content = column(); content.setPadding(dp(20), dp(8), dp(20), 0); add(content, field);
+        dialog().setTitle(title).setMessage("请先验证当前主密码")
+                .setView(content).setNegativeButton("取消", null)
+                .setPositiveButton("继续", (dialog, which) -> {
+                    String candidate = field.getText().toString();
+                    run(() -> store.verifyPassword(candidate), () -> action.accept(candidate));
+                }).show();
     }
 
-    private void saveSettings(EditText url, EditText user, EditText pass, EditText path, EditText lock, EditText clip, Boolean upload) {
+    private void authenticateBiometric(Cipher cipher, String title, java.util.function.Consumer<Cipher> success) {
+        BiometricPrompt prompt = new BiometricPrompt(this, ContextCompat.getMainExecutor(this),
+                new BiometricPrompt.AuthenticationCallback() {
+                    @Override public void onAuthenticationSucceeded(BiometricPrompt.AuthenticationResult result) {
+                        Cipher authenticated = result.getCryptoObject() == null ? null : result.getCryptoObject().getCipher();
+                        if (authenticated == null) { toast("指纹验证未返回加密凭据"); return; }
+                        success.accept(authenticated);
+                    }
+                    @Override public void onAuthenticationError(int code, CharSequence message) {
+                        if (code != BiometricPrompt.ERROR_USER_CANCELED && code != BiometricPrompt.ERROR_NEGATIVE_BUTTON)
+                            toast("指纹验证失败：" + message);
+                    }
+                });
+        BiometricPrompt.PromptInfo info = new BiometricPrompt.PromptInfo.Builder()
+                .setTitle(title).setSubtitle("使用设备上已录入的指纹")
+                .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
+                .setNegativeButtonText("取消").build();
+        prompt.authenticate(info, new BiometricPrompt.CryptoObject(cipher));
+    }
+
+    private void unlockWithBiometric() {
+        try {
+            if (!deviceUnlock.biometricAvailable(this)) { toast("请先在系统设置中录入指纹"); return; }
+            authenticateBiometric(deviceUnlock.biometricDecryptCipher(), "解锁验证器", cipher -> {
+                try {
+                    String password = deviceUnlock.biometricPassword(cipher);
+                    run(() -> {
+                        try { store.unlock(password); }
+                        catch (Exception error) { deviceUnlock.disableBiometric(); throw error; }
+                    }, () -> { render(); handleIntent(getIntent()); });
+                } catch (Exception error) { deviceUnlock.disableBiometric(); render(); toast("指纹凭据已失效，请用主密码解锁"); }
+            });
+        } catch (Exception error) { deviceUnlock.disableBiometric(); render(); toast("指纹凭据已失效，请用主密码解锁"); }
+    }
+
+    private void toggleDirectUnlock() {
+        if (deviceUnlock.directEnabled()) {
+            deviceUnlock.disableDirect(); captureSettingsDraft(); render(); toast("已关闭免密码进入");
+            return;
+        }
+        askMasterPassword("启用免密码进入", password -> run(() -> deviceUnlock.enableDirect(password), () -> {
+            captureSettingsDraft(); render(); toast("已开启免密码进入");
+        }));
+    }
+
+    private void toggleBiometricUnlock() {
+        if (deviceUnlock.biometricEnabled()) {
+            deviceUnlock.disableBiometric(); captureSettingsDraft(); render(); toast("已关闭指纹解锁");
+            return;
+        }
+        if (!deviceUnlock.biometricAvailable(this)) { toast("请先在系统设置中录入指纹"); return; }
+        askMasterPassword("启用指纹解锁", password -> {
+            try {
+                authenticateBiometric(deviceUnlock.biometricEncryptCipher(), "启用指纹解锁", cipher -> {
+                    try {
+                        deviceUnlock.saveBiometric(cipher, password);
+                        captureSettingsDraft(); render(); toast("已开启指纹解锁");
+                    } catch (Exception error) { deviceUnlock.disableBiometric(); toast("无法保存指纹凭据"); }
+                });
+            } catch (Exception error) { toast("无法启用指纹解锁：" + error.getMessage()); }
+        });
+    }
+
+    private void settingsDialog() {
+        settingsOpen = true; settingsDraft = null; render();
+    }
+
+    private void captureSettingsDraft() {
+        if (settingsUrl == null || settingsUser == null || settingsPass == null || settingsPath == null
+                || settingsLock == null || settingsClip == null || settingsClearPass == null) return;
+        SettingsDraft draft = new SettingsDraft();
+        draft.url = settingsUrl.getText().toString(); draft.user = settingsUser.getText().toString();
+        draft.pass = settingsPass.getText().toString(); draft.path = settingsPath.getText().toString();
+        draft.lock = settingsLock.getText().toString(); draft.clip = settingsClip.getText().toString();
+        draft.clearPass = settingsClearPass.isChecked(); settingsDraft = draft;
+    }
+
+    private void renderSettingsPage() {
+        LinearLayout header = row();
+        icon(header, "back", "返回验证码", false, () -> { settingsOpen = false; settingsDraft = null; render(); }, 40);
+        LinearLayout headings = column(); headings.setPadding(dp(6), 0, 0, 0);
+        add(headings, text("设置", 25, true)); add(headings, muted("同步、安全与外观", 12));
+        equal(header, headings);
+        icon(header, "lock", "锁定保险库", true, () -> { store.lock(); settingsOpen = false; settingsDraft = null; render(); }, 40);
+        add(root, header); gap(root, 12);
+
+        ScrollView scroll = new ScrollView(this); scroll.setVerticalScrollBarEnabled(false);
+        LinearLayout form = column(); form.setPadding(0, 0, 0, dp(24)); scroll.addView(form);
+        root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
+
+        add(form, sectionTitle("外观"));
+        LinearLayout appearance = sectionCard(form);
+        add(appearance, text("主题", 15, true)); gap(appearance, 10);
+        LinearLayout themeOptions = row(); themeOptions.setPadding(dp(3), dp(3), dp(3), dp(3));
+        themeOptions.setBackground(UiStyle.rounded(style.fill, this, 9));
+        Button light = button("浅色", () -> setDarkTheme(false));
+        Button dark = button("深色", () -> setDarkTheme(true));
+        light.setBackground(UiStyle.rounded(style.dark ? style.fill : style.surface, this, 7));
+        dark.setBackground(UiStyle.rounded(style.dark ? style.surface : style.fill, this, 7));
+        light.setTextColor(style.dark ? style.muted : style.text);
+        dark.setTextColor(style.dark ? style.text : style.muted);
+        equal(themeOptions, light); equal(themeOptions, dark); add(appearance, themeOptions);
+        gap(appearance, 17);
+        CheckBox showCodes = new CheckBox(this); showCodes.setText("默认显示所有验证码");
+        showCodes.setTextSize(15); showCodes.setTextColor(style.text);
+        showCodes.setChecked(showCodesByDefault);
+        showCodes.setButtonTintList(android.content.res.ColorStateList.valueOf(style.accent));
+        showCodes.setOnCheckedChangeListener((button, checked) -> {
+            showCodesByDefault = checked;
+            if (!checked) revealed.clear();
+            getPreferences(MODE_PRIVATE).edit().putBoolean("show_codes_by_default", checked).apply();
+        });
+        add(appearance, showCodes);
+        add(appearance, muted("开启后解锁进入首页即可查看全部动态验证码；此设置只作用于本机。", 12));
+
+        JSONObject current = store.settings(); SettingsDraft draft = settingsDraft;
+        add(form, sectionTitle("常规"));
+        LinearLayout general = sectionCard(form);
+        EditText lock = labeledField(general, "自动锁定（秒）", "180", draft == null ? String.valueOf(current.optLong("autolock_seconds", 180)) : draft.lock, false);
+        EditText clip = labeledField(general, "清空剪贴板（秒）", "30", draft == null ? String.valueOf(current.optLong("clipboard_clear_seconds", 30)) : draft.clip, false);
+        lock.setInputType(InputType.TYPE_CLASS_NUMBER); clip.setInputType(InputType.TYPE_CLASS_NUMBER);
+        add(general, muted("填 0 表示关闭对应功能。", 12));
+
+        add(form, sectionTitle("解锁方式"));
+        LinearLayout security = sectionCard(form);
+        add(security, text("指纹解锁", 15, true)); gap(security, 5);
+        add(security, muted(deviceUnlock.biometricEnabled()
+                ? "已开启 · 锁定后可用指纹解锁"
+                : "使用设备指纹解锁保险库", 12)); gap(security, 9);
+        add(security, button(deviceUnlock.biometricEnabled() ? "关闭指纹解锁" : "开启指纹解锁", this::toggleBiometricUnlock));
+        gap(security, 18);
+        add(security, text("免密码进入", 15, true)); gap(security, 5);
+        add(security, muted(deviceUnlock.directEnabled()
+                ? "已开启 · 打开应用时直接进入，自动锁定暂停"
+                : "打开应用时直接进入，无需输入主密码", 12)); gap(security, 9);
+        add(security, button(deviceUnlock.directEnabled() ? "关闭免密码进入" : "开启免密码进入", this::toggleDirectUnlock));
+        gap(security, 8);
+        add(security, muted("开启前需验证主密码。凭据只保存在这台设备的 Android 密钥库中。", 12));
+
+        add(form, sectionTitle("WEBDAV 同步"));
+        LinearLayout sync = sectionCard(form);
+        boolean configured = !current.optString("webdav_url").trim().isEmpty();
+        TextView status = text(configured ? "●  已配置 · 新账号自动上传" : "●  尚未配置", 13, true);
+        status.setTextColor(configured ? style.ok : style.muted); add(sync, status); gap(sync, 13);
+        EditText url = labeledField(sync, "服务器地址", "https://dav.example.com/", draft == null ? current.optString("webdav_url") : draft.url, false);
+        EditText user = labeledField(sync, "用户名", "WebDAV 用户名", draft == null ? current.optString("webdav_user") : draft.user, false);
+        EditText pass = labeledField(sync, "应用密码", "留空保持已保存的密码", draft == null ? "" : draft.pass, true);
+        EditText path = labeledField(sync, "远程文件", "/authenticator/vault.enc", draft == null ? current.optString("webdav_path", "/authenticator/vault.enc") : draft.path, false);
+        CheckBox clearPass = new CheckBox(this); clearPass.setText("清除已保存的 WebDAV 密码");
+        clearPass.setTextSize(13); clearPass.setTextColor(style.text);
+        clearPass.setChecked(draft != null && draft.clearPass);
+        clearPass.setButtonTintList(android.content.res.ColorStateList.valueOf(style.accent)); add(sync, clearPass);
+        settingsUrl = url; settingsUser = user; settingsPass = pass; settingsPath = path;
+        settingsLock = lock; settingsClip = clip; settingsClearPass = clearPass;
+        gap(sync, 10);
+        LinearLayout syncActions = row();
+        Button down = button("拉取远程", () -> dialog()
+                .setTitle("拉取远程保险库？")
+                .setMessage("远程账号将替换本地账号。操作前会保存一份本地加密备份。")
+                .setNegativeButton("取消", null)
+                .setPositiveButton("拉取", (dialog, which) -> saveSettings(url, user, pass, path, lock, clip, clearPass, false)).show());
+        Button up = button("上传本地", () -> saveSettings(url, user, pass, path, lock, clip, clearPass, true));
+        equal(syncActions, down);
+        View space = new View(this); syncActions.addView(space, new LinearLayout.LayoutParams(dp(9), 1));
+        equal(syncActions, up); add(sync, syncActions); gap(sync, 8);
+        add(sync, muted("上传会检查远程版本；如有冲突，请先确认各端改动。", 12));
+
+        add(form, sectionTitle("主密码"));
+        LinearLayout passwordCard = sectionCard(form);
+        EditText old = labeledField(passwordCard, "当前密码", "当前主密码", "", true);
+        EditText next = labeledField(passwordCard, "新密码", "至少 8 位", "", true);
+        EditText confirm = labeledField(passwordCard, "确认新密码", "再次输入新密码", "", true);
+        add(passwordCard, button("更新主密码", () -> {
+            String oldValue = old.getText().toString(), newValue = next.getText().toString();
+            if (!newValue.equals(confirm.getText().toString())) { toast("两次密码不一致"); return; }
+            run(() -> { store.changePassword(oldValue, newValue); deviceUnlock.clear(); }, () -> {
+                old.setText(""); next.setText(""); confirm.setText("");
+                captureSettingsDraft(); render();
+                toast("主密码已更新；请重新同步其他设备，并按需重新开启快捷解锁");
+            });
+        }));
+        gap(passwordCard, 8); add(passwordCard, muted("修改后需要让其他设备使用新密码重新同步。", 12));
+
+        gap(root, 10);
+        add(root, primaryButton("保存设置", () -> saveSettings(url, user, pass, path, lock, clip, clearPass, null)));
+    }
+
+    private void setDarkTheme(boolean dark) {
+        if (style.dark == dark) return;
+        if (settingsOpen) captureSettingsDraft();
+        getPreferences(MODE_PRIVATE).edit().putBoolean("dark_theme", dark).apply();
+        style = new UiStyle(dark); render();
+    }
+
+    private void saveSettings(EditText url, EditText user, EditText pass, EditText path, EditText lock, EditText clip, CheckBox clearPass, Boolean upload) {
         String newUrl = url.getText().toString().trim(), newUser = user.getText().toString().trim(), newPath = path.getText().toString().trim();
         String newPass = pass.getText().toString(), lockValue = lock.getText().toString(), clipValue = clip.getText().toString();
+        boolean clearPassword = clearPass.isChecked();
         run(() -> {
             JSONObject settings = new JSONObject(store.settings().toString());
             if (!settings.optString("webdav_url").equals(newUrl) || !settings.optString("webdav_user").equals(newUser) || !settings.optString("webdav_path").equals(newPath)) settings.put("webdav_etag", "");
             settings.put("webdav_url", newUrl).put("webdav_user", newUser).put("webdav_path", newPath.isEmpty() ? "/authenticator/vault.enc" : newPath)
                     .put("autolock_seconds", Long.parseLong(lockValue)).put("clipboard_clear_seconds", Long.parseLong(clipValue));
-            if (!newPass.isEmpty()) settings.put("webdav_password", newPass);
+            if (clearPassword) settings.put("webdav_password", "");
+            else if (!newPass.isEmpty()) settings.put("webdav_password", newPass);
             store.updateSettings(settings);
             if (upload != null) {
                 if (upload) { String etag = WebDav.put(settings, store.encryptedBytes()); store.setEtag(etag); }
                 else { WebDav.Download download = WebDav.get(newUrl, settings.optString("webdav_path"), newUser, settings.optString("webdav_password")); store.replaceRemote(download.bytes, download.etag); }
             }
-        }, () -> { render(); toast(upload == null ? "设置已保存" : upload ? "上传成功" : "拉取成功，已保留本地加密备份"); });
+        }, () -> { settingsDraft = null; render(); toast(upload == null ? "设置已保存" : upload ? "上传成功" : "拉取成功，已保留本地加密备份"); });
     }
 
     private void restoreDialog() {
-        LinearLayout form = column(); form.setPadding(dp(18), 0, dp(18), 0);
-        EditText url = input("WebDAV 地址", "", false), user = input("用户名", "", false), pass = input("应用密码", "", true);
-        EditText path = input("远程路径", "/authenticator/vault.enc", false), master = input("保险库主密码", "", true);
-        for (EditText v : new EditText[]{url, user, pass, path, master}) add(form, v);
-        new AlertDialog.Builder(this).setTitle("恢复已有保险库").setView(form).setNegativeButton("取消", null)
+        LinearLayout form = column(); form.setPadding(dp(18), dp(8), dp(18), dp(8));
+        EditText url = labeledField(form, "WebDAV 地址", "https://dav.example.com/", "", false);
+        EditText user = labeledField(form, "用户名", "WebDAV 用户名", "", false);
+        EditText pass = labeledField(form, "应用密码", "WebDAV 密码", "", true);
+        EditText path = labeledField(form, "远程文件", "/authenticator/vault.enc", "/authenticator/vault.enc", false);
+        EditText master = labeledField(form, "保险库主密码", "与桌面端相同的主密码", "", true);
+        ScrollView scroll = new ScrollView(this); scroll.addView(form);
+        dialog().setTitle("恢复已有保险库").setView(scroll).setNegativeButton("取消", null)
                 .setPositiveButton("拉取", (d, w) -> {
                     String base = url.getText().toString().trim(), remotePath = path.getText().toString().trim();
                     String username = user.getText().toString(), password = pass.getText().toString(), masterPassword = master.getText().toString();
@@ -440,15 +859,4 @@ public final class MainActivity extends Activity {
                 }).show();
     }
 
-    private void passwordDialog() {
-        LinearLayout form = column(); form.setPadding(dp(18), 0, dp(18), 0);
-        EditText old = input("当前密码", "", true), next = input("新密码", "", true), confirm = input("再次输入新密码", "", true);
-        for (EditText field : new EditText[]{old, next, confirm}) add(form, field);
-        new AlertDialog.Builder(this).setTitle("修改主密码").setView(form).setNegativeButton("取消", null)
-                .setPositiveButton("保存", (d, w) -> {
-                    String oldPassword = old.getText().toString(), newPassword = next.getText().toString();
-                    if (!newPassword.equals(confirm.getText().toString())) { toast("两次密码不一致"); return; }
-                    run(() -> store.changePassword(oldPassword, newPassword), () -> toast("主密码已更新，请重新同步其他设备"));
-                }).show();
-    }
 }

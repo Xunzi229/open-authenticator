@@ -5,8 +5,11 @@
 ## 功能
 
 - 主密码创建、解锁、修改和空闲自动锁定
+- 可在设置中开启指纹解锁或免密码进入；两种凭据仅加密保存在当前设备，修改主密码后需重新开启
+- 与桌面端浅色界面一致的分组账号列表、彩色账号标识和设置分区；设置中可切换浅色 / 深色主题
+- 可在设置中选择解锁后默认显示全部验证码；显示偏好仅保存在本机
 - 添加、编辑、删除、搜索 TOTP 账号；支持 SHA1 / SHA256 / SHA512、6 / 8 位和自定义周期
-- 主界面直接扫码添加账号；也可从图片或文件导入 `otpauth://`、Google 验证器迁移二维码、桌面端 JSON 备份
+- 主界面使用竖屏取景框扫码添加账号；也可从图片或文件导入 `otpauth://`、Google 验证器迁移二维码、桌面端 JSON 备份
 - 显示账号二维码、复制验证码，以及导出 JSON 备份
 - 新增账号后自动上传到已配置的 HTTPS WebDAV；仍可手动上传与拉取，拉取前备份本地加密保险库
 
@@ -26,4 +29,6 @@ WebDAV 只允许 HTTPS，或本机 `localhost` / `127.0.0.1` 的 HTTP。默认�
 
 用 Android Studio 打开 `android/` 目录，让 IDE 安装所需的 Android SDK 35 和 Gradle 8.9，然后运行 `app`。命令行也可在该目录运行 `gradlew.bat :app:assembleDebug`（Windows）或 `sh gradlew :app:assembleDebug`（macOS / Linux）。本仓库不包含已构建安装包。
 
-Android 端目前使用主密码解锁；桌面端的 Touch ID / Windows Hello、托盘弹窗和免密进入属于桌面特性。Android 端没有后台自动同步。
+GitHub Actions 手动运行 `Cross-platform CI` 可生成 7 天有效的调试 APK。工作流从仓库 Secrets 读取固定签名密钥：`ANDROID_DEBUG_KEYSTORE_BASE64`、`ANDROID_DEBUG_STORE_PASSWORD`、`ANDROID_DEBUG_KEY_ALIAS`、`ANDROID_DEBUG_KEY_PASSWORD`。请长期备份原始 keystore 和密码；更换密钥后，旧安装包无法直接覆盖安装，须先备份应用数据。执行本地构建时如需与 CI 包互相覆盖安装，须设置同名环境变量，其中 `ANDROID_DEBUG_KEYSTORE` 指向原始 keystore 文件。
+
+开启免密码进入后，应用启动时会使用 Android 密钥库保存的凭据解锁，空闲自动锁定在本机暂停；关闭后恢复原设置。指纹解锁需要设备录入强生物识别。Android 端没有后台自动同步。
