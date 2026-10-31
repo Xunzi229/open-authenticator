@@ -83,6 +83,7 @@ public final class MainActivity extends FragmentActivity {
     private String exportText;
     private String lastCopied;
     private boolean foreground;
+    private boolean autoUnlockInProgress;
 
     interface Task { void run() throws Exception; }
 
@@ -94,12 +95,21 @@ public final class MainActivity extends FragmentActivity {
         style = new UiStyle(getPreferences(MODE_PRIVATE).getBoolean("dark_theme", false));
         root = new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL);
         setContentView(root);
+        autoUnlockInProgress = store.exists() && deviceUnlock.directEnabled();
         render();
-        if (store.exists() && deviceUnlock.directEnabled()) {
-            run(() -> {
-                try { store.unlock(deviceUnlock.directPassword()); }
-                catch (Exception error) { deviceUnlock.disableDirect(); throw error; }
-            }, this::render);
+        if (autoUnlockInProgress) {
+            worker.submit(() -> {
+                try {
+                    store.unlock(deviceUnlock.directPassword());
+                    runOnUiThread(() -> { autoUnlockInProgress = false; render(); handleIntent(getIntent()); });
+                } catch (Exception error) {
+                    deviceUnlock.disableDirect();
+                    runOnUiThread(() -> {
+                        autoUnlockInProgress = false; render();
+                        toast("免密码凭据已失效，请用主密码解锁");
+                    });
+                }
+            });
         }
         handler.postDelayed(this::tick, 1000);
     }
@@ -216,6 +226,7 @@ public final class MainActivity extends FragmentActivity {
         root.removeAllViews();
         root.setPadding(dp(16), dp(14), dp(16), dp(12)); applyWindowColors();
         codeViews.clear(); countdown = null; body = null;
+        if (autoUnlockInProgress) { unlockingScreen(); return; }
         if (!settingsOpen) {
             settingsUrl = null; settingsUser = null; settingsPass = null; settingsPath = null;
             settingsLock = null; settingsClip = null; settingsClearPass = null;
@@ -225,6 +236,13 @@ public final class MainActivity extends FragmentActivity {
         try { store.checkLock(); } catch (Exception error) { settingsOpen = false; settingsDraft = null; revealed.clear(); authScreen(false); return; }
         if (settingsOpen) { renderSettingsPage(); return; }
         renderHome();
+    }
+
+    private void unlockingScreen() {
+        LinearLayout content = column(); content.setGravity(Gravity.CENTER);
+        TextView title = text("验证器", 24, true); title.setGravity(Gravity.CENTER); add(content, title); gap(content, 8);
+        TextView hint = muted("正在解锁保险库…", 13); hint.setGravity(Gravity.CENTER); add(content, hint);
+        root.addView(content, new LinearLayout.LayoutParams(-1, 0, 1));
     }
 
     private void renderHome() {
