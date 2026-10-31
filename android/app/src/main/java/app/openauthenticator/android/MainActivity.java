@@ -64,7 +64,15 @@ public final class MainActivity extends Activity {
     private final List<TextView> codeViews = new ArrayList<>();
     private final Set<String> revealed = new HashSet<>();
     private boolean settingsOpen;
+    private SettingsDraft settingsDraft;
+    private EditText settingsUrl, settingsUser, settingsPass, settingsPath, settingsLock, settingsClip;
+    private CheckBox settingsClearPass;
     private String query = "";
+
+    private static final class SettingsDraft {
+        String url, user, pass, path, lock, clip;
+        boolean clearPass;
+    }
     private String exportText;
     private String lastCopied;
     private boolean foreground;
@@ -83,15 +91,18 @@ public final class MainActivity extends Activity {
     }
 
     @Override protected void onResume() { super.onResume(); foreground = true; render(); handleIntent(getIntent()); }
-    @Override protected void onPause() { foreground = false; super.onPause(); }
+    @Override protected void onPause() { if (settingsOpen) captureSettingsDraft(); foreground = false; super.onPause(); }
     @Override protected void onDestroy() { store.lock(); worker.shutdownNow(); super.onDestroy(); }
     @Override protected void onNewIntent(Intent intent) { super.onNewIntent(intent); setIntent(intent); handleIntent(intent); }
     @Override public boolean dispatchTouchEvent(MotionEvent event) {
-        if (event.getActionMasked() == MotionEvent.ACTION_DOWN && store != null && store.unlocked()) store.touch();
+        if (event.getActionMasked() == MotionEvent.ACTION_DOWN && store != null && store.unlocked()) {
+            try { store.checkTimeout(); store.touch(); }
+            catch (Exception error) { render(); return true; }
+        }
         return super.dispatchTouchEvent(event);
     }
     @Override public void onBackPressed() {
-        if (settingsOpen) { settingsOpen = false; render(); }
+        if (settingsOpen) { settingsOpen = false; settingsDraft = null; render(); }
         else super.onBackPressed();
     }
 
@@ -155,7 +166,12 @@ public final class MainActivity extends Activity {
         field.setPadding(dp(13), dp(10), dp(13), dp(10)); field.setMinHeight(dp(46));
         field.addTextChangedListener(new android.text.TextWatcher() {
             public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
-            public void onTextChanged(CharSequence s, int start, int before, int count) { if (store != null && store.unlocked()) store.touch(); }
+            public void onTextChanged(CharSequence s, int start, int before, int count) {
+                if (store != null && store.unlocked()) {
+                    try { store.checkTimeout(); store.touch(); }
+                    catch (Exception error) { render(); }
+                }
+            }
             public void afterTextChanged(android.text.Editable value) {}
         });
         return field;
@@ -186,9 +202,13 @@ public final class MainActivity extends Activity {
         root.removeAllViews();
         root.setPadding(dp(16), dp(14), dp(16), dp(12)); applyWindowColors();
         codeViews.clear(); countdown = null; body = null;
-        if (!store.exists()) { settingsOpen = false; authScreen(true); return; }
-        if (!store.unlocked()) { settingsOpen = false; revealed.clear(); authScreen(false); return; }
-        try { store.checkLock(); } catch (Exception error) { settingsOpen = false; revealed.clear(); authScreen(false); return; }
+        if (!settingsOpen) {
+            settingsUrl = null; settingsUser = null; settingsPass = null; settingsPath = null;
+            settingsLock = null; settingsClip = null; settingsClearPass = null;
+        }
+        if (!store.exists()) { settingsOpen = false; settingsDraft = null; authScreen(true); return; }
+        if (!store.unlocked()) { settingsOpen = false; settingsDraft = null; revealed.clear(); authScreen(false); return; }
+        try { store.checkLock(); } catch (Exception error) { settingsOpen = false; settingsDraft = null; revealed.clear(); authScreen(false); return; }
         if (settingsOpen) { renderSettingsPage(); return; }
         renderHome();
     }
@@ -343,8 +363,11 @@ public final class MainActivity extends Activity {
     }
 
     private int emailColor(String email) {
-        int[] colors = {0xff1d4ed8, 0xffc2410c, 0xff15803d, 0xffbe123c, 0xff7e22ce,
-                0xff0369a1, 0xffa16207, 0xff0f766e, 0xffb91c1c, 0xff4338ca};
+        int[] colors = style.dark
+                ? new int[]{0xff64b5ff, 0xffff9f0a, 0xff32d74b, 0xffff6482, 0xffbf5af2,
+                    0xff5ac8fa, 0xffffd60a, 0xff5eead4, 0xffff6961, 0xffa5b4fc}
+                : new int[]{0xff1d4ed8, 0xffc2410c, 0xff15803d, 0xffbe123c, 0xff7e22ce,
+                    0xff0369a1, 0xffa16207, 0xff0f766e, 0xffb91c1c, 0xff4338ca};
         return colors[Math.floorMod(email.toLowerCase(Locale.ROOT).hashCode(), colors.length)];
     }
 
@@ -554,16 +577,26 @@ public final class MainActivity extends Activity {
     }
 
     private void settingsDialog() {
-        settingsOpen = true; render();
+        settingsOpen = true; settingsDraft = null; render();
+    }
+
+    private void captureSettingsDraft() {
+        if (settingsUrl == null || settingsUser == null || settingsPass == null || settingsPath == null
+                || settingsLock == null || settingsClip == null || settingsClearPass == null) return;
+        SettingsDraft draft = new SettingsDraft();
+        draft.url = settingsUrl.getText().toString(); draft.user = settingsUser.getText().toString();
+        draft.pass = settingsPass.getText().toString(); draft.path = settingsPath.getText().toString();
+        draft.lock = settingsLock.getText().toString(); draft.clip = settingsClip.getText().toString();
+        draft.clearPass = settingsClearPass.isChecked(); settingsDraft = draft;
     }
 
     private void renderSettingsPage() {
         LinearLayout header = row();
-        icon(header, "back", "返回验证码", false, () -> { settingsOpen = false; render(); }, 40);
+        icon(header, "back", "返回验证码", false, () -> { settingsOpen = false; settingsDraft = null; render(); }, 40);
         LinearLayout headings = column(); headings.setPadding(dp(6), 0, 0, 0);
         add(headings, text("设置", 25, true)); add(headings, muted("同步、安全与外观", 12));
         equal(header, headings);
-        icon(header, "lock", "锁定保险库", true, () -> { store.lock(); settingsOpen = false; render(); }, 40);
+        icon(header, "lock", "锁定保险库", true, () -> { store.lock(); settingsOpen = false; settingsDraft = null; render(); }, 40);
         add(root, header); gap(root, 12);
 
         ScrollView scroll = new ScrollView(this); scroll.setVerticalScrollBarEnabled(false);
@@ -583,11 +616,11 @@ public final class MainActivity extends Activity {
         dark.setTextColor(style.dark ? style.text : style.muted);
         equal(themeOptions, light); equal(themeOptions, dark); add(appearance, themeOptions);
 
-        JSONObject current = store.settings();
+        JSONObject current = store.settings(); SettingsDraft draft = settingsDraft;
         add(form, sectionTitle("常规"));
         LinearLayout general = sectionCard(form);
-        EditText lock = labeledField(general, "自动锁定（秒）", "180", String.valueOf(current.optLong("autolock_seconds", 180)), false);
-        EditText clip = labeledField(general, "清空剪贴板（秒）", "30", String.valueOf(current.optLong("clipboard_clear_seconds", 30)), false);
+        EditText lock = labeledField(general, "自动锁定（秒）", "180", draft == null ? String.valueOf(current.optLong("autolock_seconds", 180)) : draft.lock, false);
+        EditText clip = labeledField(general, "清空剪贴板（秒）", "30", draft == null ? String.valueOf(current.optLong("clipboard_clear_seconds", 30)) : draft.clip, false);
         lock.setInputType(InputType.TYPE_CLASS_NUMBER); clip.setInputType(InputType.TYPE_CLASS_NUMBER);
         add(general, muted("填 0 表示关闭对应功能。", 12));
 
@@ -596,13 +629,16 @@ public final class MainActivity extends Activity {
         boolean configured = !current.optString("webdav_url").trim().isEmpty();
         TextView status = text(configured ? "●  已配置 · 新账号自动上传" : "●  尚未配置", 13, true);
         status.setTextColor(configured ? style.ok : style.muted); add(sync, status); gap(sync, 13);
-        EditText url = labeledField(sync, "服务器地址", "https://dav.example.com/", current.optString("webdav_url"), false);
-        EditText user = labeledField(sync, "用户名", "WebDAV 用户名", current.optString("webdav_user"), false);
-        EditText pass = labeledField(sync, "应用密码", "留空保持已保存的密码", "", true);
-        EditText path = labeledField(sync, "远程文件", "/authenticator/vault.enc", current.optString("webdav_path", "/authenticator/vault.enc"), false);
+        EditText url = labeledField(sync, "服务器地址", "https://dav.example.com/", draft == null ? current.optString("webdav_url") : draft.url, false);
+        EditText user = labeledField(sync, "用户名", "WebDAV 用户名", draft == null ? current.optString("webdav_user") : draft.user, false);
+        EditText pass = labeledField(sync, "应用密码", "留空保持已保存的密码", draft == null ? "" : draft.pass, true);
+        EditText path = labeledField(sync, "远程文件", "/authenticator/vault.enc", draft == null ? current.optString("webdav_path", "/authenticator/vault.enc") : draft.path, false);
         CheckBox clearPass = new CheckBox(this); clearPass.setText("清除已保存的 WebDAV 密码");
         clearPass.setTextSize(13); clearPass.setTextColor(style.text);
+        clearPass.setChecked(draft != null && draft.clearPass);
         clearPass.setButtonTintList(android.content.res.ColorStateList.valueOf(style.accent)); add(sync, clearPass);
+        settingsUrl = url; settingsUser = user; settingsPass = pass; settingsPath = path;
+        settingsLock = lock; settingsClip = clip; settingsClearPass = clearPass;
         gap(sync, 10);
         LinearLayout syncActions = row();
         Button down = button("拉取远程", () -> dialog()
@@ -637,6 +673,7 @@ public final class MainActivity extends Activity {
 
     private void setDarkTheme(boolean dark) {
         if (style.dark == dark) return;
+        if (settingsOpen) captureSettingsDraft();
         getPreferences(MODE_PRIVATE).edit().putBoolean("dark_theme", dark).apply();
         style = new UiStyle(dark); render();
     }
@@ -657,7 +694,7 @@ public final class MainActivity extends Activity {
                 if (upload) { String etag = WebDav.put(settings, store.encryptedBytes()); store.setEtag(etag); }
                 else { WebDav.Download download = WebDav.get(newUrl, settings.optString("webdav_path"), newUser, settings.optString("webdav_password")); store.replaceRemote(download.bytes, download.etag); }
             }
-        }, () -> { render(); toast(upload == null ? "设置已保存" : upload ? "上传成功" : "拉取成功，已保留本地加密备份"); });
+        }, () -> { settingsDraft = null; render(); toast(upload == null ? "设置已保存" : upload ? "上传成功" : "拉取成功，已保留本地加密备份"); });
     }
 
     private void restoreDialog() {
