@@ -14,6 +14,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.text.InputType;
 import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowManager;
 import android.widget.Button;
@@ -22,7 +23,6 @@ import android.widget.EditText;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
-import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -86,6 +86,10 @@ public final class MainActivity extends Activity {
     @Override protected void onPause() { foreground = false; super.onPause(); }
     @Override protected void onDestroy() { store.lock(); worker.shutdownNow(); super.onDestroy(); }
     @Override protected void onNewIntent(Intent intent) { super.onNewIntent(intent); setIntent(intent); handleIntent(intent); }
+    @Override public boolean dispatchTouchEvent(MotionEvent event) {
+        if (event.getActionMasked() == MotionEvent.ACTION_DOWN && store != null && store.unlocked()) store.touch();
+        return super.dispatchTouchEvent(event);
+    }
     @Override public void onBackPressed() {
         if (settingsOpen) { settingsOpen = false; render(); }
         else super.onBackPressed();
@@ -112,9 +116,14 @@ public final class MainActivity extends Activity {
         getWindow().getDecorView().setSystemUiVisibility(style.dark ? 0 : View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
     }
     private void toast(String message) { Toast.makeText(this, message, Toast.LENGTH_LONG).show(); }
+    private AlertDialog.Builder dialog() {
+        return new AlertDialog.Builder(this, style.dark
+                ? android.R.style.Theme_Material_Dialog_Alert
+                : android.R.style.Theme_Material_Light_Dialog_Alert);
+    }
     private void showSaveResult(String message) {
         if (message.contains("同步失败") || message.contains("同步标记保存失败")) {
-            new AlertDialog.Builder(this).setTitle("本地已保存").setMessage(message).setPositiveButton("知道了", null).show();
+            dialog().setTitle("本地已保存").setMessage(message).setPositiveButton("知道了", null).show();
         } else toast(message);
     }
     private TextView text(String value, int size, boolean bold) {
@@ -144,6 +153,11 @@ public final class MainActivity extends Activity {
         field.setTextColor(style.text); field.setHintTextColor(style.muted);
         field.setBackground(UiStyle.rounded(style.fill, this, 10));
         field.setPadding(dp(13), dp(10), dp(13), dp(10)); field.setMinHeight(dp(46));
+        field.addTextChangedListener(new android.text.TextWatcher() {
+            public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+            public void onTextChanged(CharSequence s, int start, int before, int count) { if (store != null && store.unlocked()) store.touch(); }
+            public void afterTextChanged(android.text.Editable value) {}
+        });
         return field;
     }
     private EditText multiline(String hint, String value) {
@@ -380,7 +394,7 @@ public final class MainActivity extends Activity {
         EditText period = labeledField(form, "周期（秒）", "30", existing == null ? "30" : String.valueOf(existing.optLong("period")), false);
         digits.setInputType(InputType.TYPE_CLASS_NUMBER); period.setInputType(InputType.TYPE_CLASS_NUMBER);
         ScrollView scroll = new ScrollView(this); scroll.addView(form);
-        new AlertDialog.Builder(this).setTitle(existing == null ? "添加账号" : "编辑账号").setView(scroll)
+        dialog().setTitle(existing == null ? "添加账号" : "编辑账号").setView(scroll)
                 .setNegativeButton("取消", null).setPositiveButton("保存", (dialog, which) -> {
                     String issuerValue = issuer.getText().toString(), nameValue = name.getText().toString();
                     String emailValue = email.getText().toString(), notesValue = notes.getText().toString();
@@ -400,13 +414,13 @@ public final class MainActivity extends Activity {
     }
 
     private void confirmDelete(JSONObject a) {
-        new AlertDialog.Builder(this).setTitle("删除账号？").setMessage(a.optString("issuer") + " " + a.optString("name"))
+        dialog().setTitle("删除账号？").setMessage(a.optString("issuer") + " " + a.optString("name"))
                 .setNegativeButton("取消", null).setPositiveButton("删除", (d, w) -> run(() -> store.delete(a.getString("id")), this::render)).show();
     }
 
     private void menu() {
         String[] items = {"扫描二维码", "从图片导入", "粘贴链接或文本", "从文件导入", "导出备份", "设置与同步", "锁定"};
-        new AlertDialog.Builder(this).setItems(items, (dialog, index) -> {
+        dialog().setItems(items, (dialog, index) -> {
             switch (index) {
                 case 0: scan(); break;
                 case 1: pick("image/*", PICK_IMAGE); break;
@@ -425,7 +439,7 @@ public final class MainActivity extends Activity {
 
     private void importDialog() {
         EditText content = multiline("otpauth:// 链接、Google 转移链接或 JSON", "");
-        new AlertDialog.Builder(this).setTitle("导入账号").setView(content).setNegativeButton("取消", null)
+        dialog().setTitle("导入账号").setView(content).setNegativeButton("取消", null)
                 .setPositiveButton("导入", (d, w) -> importContent(content.getText().toString())).show();
     }
 
@@ -502,14 +516,14 @@ public final class MainActivity extends Activity {
             int[] pixels = new int[720 * 720]; for (int y = 0; y < 720; y++) for (int x = 0; x < 720; x++) pixels[y * 720 + x] = matrix.get(x, y) ? Color.BLACK : Color.WHITE;
             Bitmap bitmap = Bitmap.createBitmap(pixels, 720, 720, Bitmap.Config.ARGB_8888);
             ImageView image = new ImageView(this); image.setImageBitmap(bitmap); image.setPadding(dp(20), dp(20), dp(20), dp(20));
-            new AlertDialog.Builder(this).setTitle("账号二维码").setView(image).setNegativeButton("关闭", null)
+            dialog().setTitle("账号二维码").setView(image).setNegativeButton("关闭", null)
                     .setPositiveButton("复制链接", (d, w) -> copy(uri, "账号链接", 30)).show();
         } catch (Exception error) { toast(error.getMessage()); }
     }
 
     private void exportDialog() {
         EditText password = input("主密码", "", true);
-        new AlertDialog.Builder(this).setTitle("导出备份").setMessage("导出内容包含明文密钥，请妥善保管。")
+        dialog().setTitle("导出备份").setMessage("导出内容包含明文密钥，请妥善保管。")
                 .setView(password).setNegativeButton("取消", null).setPositiveButton("继续", (d, w) -> {
                     String candidate = password.getText().toString();
                     run(() -> {
@@ -558,17 +572,16 @@ public final class MainActivity extends Activity {
 
         add(form, sectionTitle("外观"));
         LinearLayout appearance = sectionCard(form);
-        LinearLayout themeRow = row();
-        LinearLayout themeCopy = column(); add(themeCopy, text("深色模式", 15, true));
-        TextView themeHint = muted("与桌面端一样，可切换浅色和深色", 12); themeHint.setPadding(0, dp(3), 0, 0); add(themeCopy, themeHint);
-        equal(themeRow, themeCopy);
-        Switch themeSwitch = new Switch(this); themeSwitch.setChecked(style.dark);
-        themeSwitch.setThumbTintList(android.content.res.ColorStateList.valueOf(style.accent));
-        themeSwitch.setOnCheckedChangeListener((view, checked) -> {
-            getPreferences(MODE_PRIVATE).edit().putBoolean("dark_theme", checked).apply();
-            style = new UiStyle(checked); render();
-        });
-        themeRow.addView(themeSwitch); add(appearance, themeRow);
+        add(appearance, text("主题", 15, true)); gap(appearance, 10);
+        LinearLayout themeOptions = row(); themeOptions.setPadding(dp(3), dp(3), dp(3), dp(3));
+        themeOptions.setBackground(UiStyle.rounded(style.fill, this, 9));
+        Button light = button("浅色", () -> setDarkTheme(false));
+        Button dark = button("深色", () -> setDarkTheme(true));
+        light.setBackground(UiStyle.rounded(style.dark ? style.fill : style.surface, this, 7));
+        dark.setBackground(UiStyle.rounded(style.dark ? style.surface : style.fill, this, 7));
+        light.setTextColor(style.dark ? style.muted : style.text);
+        dark.setTextColor(style.dark ? style.text : style.muted);
+        equal(themeOptions, light); equal(themeOptions, dark); add(appearance, themeOptions);
 
         JSONObject current = store.settings();
         add(form, sectionTitle("常规"));
@@ -592,7 +605,7 @@ public final class MainActivity extends Activity {
         clearPass.setButtonTintList(android.content.res.ColorStateList.valueOf(style.accent)); add(sync, clearPass);
         gap(sync, 10);
         LinearLayout syncActions = row();
-        Button down = button("拉取远程", () -> new AlertDialog.Builder(this)
+        Button down = button("拉取远程", () -> dialog()
                 .setTitle("拉取远程保险库？")
                 .setMessage("远程账号将替换本地账号。操作前会保存一份本地加密备份。")
                 .setNegativeButton("取消", null)
@@ -622,6 +635,12 @@ public final class MainActivity extends Activity {
         add(root, primaryButton("保存设置", () -> saveSettings(url, user, pass, path, lock, clip, clearPass, null)));
     }
 
+    private void setDarkTheme(boolean dark) {
+        if (style.dark == dark) return;
+        getPreferences(MODE_PRIVATE).edit().putBoolean("dark_theme", dark).apply();
+        style = new UiStyle(dark); render();
+    }
+
     private void saveSettings(EditText url, EditText user, EditText pass, EditText path, EditText lock, EditText clip, CheckBox clearPass, Boolean upload) {
         String newUrl = url.getText().toString().trim(), newUser = user.getText().toString().trim(), newPath = path.getText().toString().trim();
         String newPass = pass.getText().toString(), lockValue = lock.getText().toString(), clipValue = clip.getText().toString();
@@ -649,7 +668,7 @@ public final class MainActivity extends Activity {
         EditText path = labeledField(form, "远程文件", "/authenticator/vault.enc", "/authenticator/vault.enc", false);
         EditText master = labeledField(form, "保险库主密码", "与桌面端相同的主密码", "", true);
         ScrollView scroll = new ScrollView(this); scroll.addView(form);
-        new AlertDialog.Builder(this).setTitle("恢复已有保险库").setView(scroll).setNegativeButton("取消", null)
+        dialog().setTitle("恢复已有保险库").setView(scroll).setNegativeButton("取消", null)
                 .setPositiveButton("拉取", (d, w) -> {
                     String base = url.getText().toString().trim(), remotePath = path.getText().toString().trim();
                     String username = user.getText().toString(), password = pass.getText().toString(), masterPassword = master.getText().toString();
