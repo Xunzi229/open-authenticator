@@ -72,7 +72,19 @@ jobs:
         working-directory: android
         run: bash gradlew :app:assembleDebug --stacktrace
 
+      - name: Smoke test Android launch
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 30
+          arch: x86_64
+          script: |
+            adb install android/app/build/outputs/apk/debug/app-debug.apk
+            adb shell am start -W -n app.openauthenticator.android/.MainActivity
+            sleep 5
+            test -n "$(adb shell pidof app.openauthenticator.android)"
+
       - name: Upload temporary APK
+        if: ${{ !cancelled() && hashFiles('android/app/build/outputs/apk/debug/app-debug.apk') != '' }}
         uses: actions/upload-artifact@v4
         with:
           name: open-authenticator-android-debug
