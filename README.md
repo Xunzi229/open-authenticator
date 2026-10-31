@@ -4,7 +4,7 @@
 
 [![CI](https://github.com/Xunzi229/open-authenticator/actions/workflows/ci.yml/badge.svg)](https://github.com/Xunzi229/open-authenticator/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/Xunzi229/open-authenticator)](https://github.com/Xunzi229/open-authenticator/releases/latest)
-[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)](https://github.com/Xunzi229/open-authenticator/releases)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20Android-lightgrey)](https://github.com/Xunzi229/open-authenticator/releases)
 
 ## 功能
 
@@ -15,6 +15,7 @@
 - 可选 Touch ID / Windows Hello 解锁
 - 设置中可切换深色 / 浅色主题
 - HTTPS WebDAV 同步密文（拉取前会在本地保留一份加密备份）
+- 独立目录的 [Android 应用](android/README.md)，支持扫码添加并在新增账号后自动上传 WebDAV
 
 ## 安装
 
@@ -25,6 +26,8 @@
 | Windows | `.msi`，另有 portable `.zip` |
 | macOS | Apple Silicon / Intel `.dmg` |
 | Linux | 由 Release 提供的桌面包 |
+
+Android 源码位于 `android/`；当前 Release 工作流尚未发布 Android 安装包。可用 Android Studio 打开该目录。
 
 macOS 若为 ad-hoc 签名，首次打开需在「系统设置 → 隐私与安全性」中允许。
 
@@ -71,7 +74,7 @@ cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D w
 cargo test --locked --manifest-path src-tauri/Cargo.toml
 ```
 
-`package.json`、`src-tauri/Cargo.toml`、`src-tauri/tauri.conf.json` 中的版本号必须一致。
+`package.json`、`src-tauri/Cargo.toml`、`src-tauri/tauri.conf.json`、`android/app/build.gradle` 中的版本号必须一致。
 
 ## 发布
 
