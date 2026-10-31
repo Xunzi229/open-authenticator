@@ -1,0 +1,9 @@
+<resources>
+    <style name="Theme.OpenAuthenticator" parent="@android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:colorAccent">#007aff</item>
+        <item name="android:statusBarColor">#f2f2f7</item>
+        <item name="android:navigationBarColor">#f2f2f7</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowActionModeOverlay">true</item>
+    </style>
+</resources>
