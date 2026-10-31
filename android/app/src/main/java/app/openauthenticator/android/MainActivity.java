@@ -1,6 +1,5 @@
 package app.openauthenticator.android;
 
-import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.ClipData;
 import android.content.ClipboardManager;
@@ -25,6 +24,13 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
+
+import androidx.biometric.BiometricPrompt;
+import androidx.biometric.BiometricManager;
+import androidx.core.content.ContextCompat;
+import androidx.fragment.app.FragmentActivity;
+
+import javax.crypto.Cipher;
 
 import com.google.zxing.integration.android.IntentIntegrator;
 import com.google.zxing.integration.android.IntentResult;
@@ -52,11 +58,12 @@ import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-public final class MainActivity extends Activity {
+public final class MainActivity extends FragmentActivity {
     private static final int PICK_IMAGE = 1, PICK_TEXT = 2, SAVE_TEXT = 3;
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private final Handler handler = new Handler(Looper.getMainLooper());
     private VaultStore store;
+    private DeviceUnlock deviceUnlock;
     private LinearLayout root, body;
     private EditText search;
     private UiStyle style;
@@ -83,10 +90,17 @@ public final class MainActivity extends Activity {
         super.onCreate(state);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
         store = new VaultStore(this);
+        deviceUnlock = new DeviceUnlock(this);
         style = new UiStyle(getPreferences(MODE_PRIVATE).getBoolean("dark_theme", false));
         root = new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL);
         setContentView(root);
         render();
+        if (store.exists() && deviceUnlock.directEnabled()) {
+            run(() -> {
+                try { store.unlock(deviceUnlock.directPassword()); }
+                catch (Exception error) { deviceUnlock.disableDirect(); throw error; }
+            }, this::render);
+        }
         handler.postDelayed(this::tick, 1000);
     }
 
@@ -271,6 +285,10 @@ public final class MainActivity extends Activity {
             if (setup && !pass.equals(finalConfirm.getText().toString())) { toast("两次密码不一致"); return; }
             run(() -> { if (setup) store.setup(pass); else store.unlock(pass); }, () -> { render(); handleIntent(getIntent()); });
         }));
+        if (!setup && deviceUnlock.biometricEnabled()) {
+            gap(card, 10);
+            add(card, button("使用指纹解锁", this::unlockWithBiometric));
+        }
         if (setup) { gap(card, 10); add(card, button("从 WebDAV 恢复", this::restoreDialog)); }
     }
 
@@ -576,6 +594,80 @@ public final class MainActivity extends Activity {
             catch (Exception ignored) {} }, Math.min(clearSeconds, 86400) * 1000);
     }
 
+    private void askMasterPassword(String title, java.util.function.Consumer<String> action) {
+        EditText field = input("当前主密码", "", true);
+        LinearLayout content = column(); content.setPadding(dp(20), dp(8), dp(20), 0); add(content, field);
+        dialog().setTitle(title).setMessage("请先验证当前主密码")
+                .setView(content).setNegativeButton("取消", null)
+                .setPositiveButton("继续", (dialog, which) -> {
+                    String candidate = field.getText().toString();
+                    run(() -> store.verifyPassword(candidate), () -> action.accept(candidate));
+                }).show();
+    }
+
+    private void authenticateBiometric(Cipher cipher, String title, java.util.function.Consumer<Cipher> success) {
+        BiometricPrompt prompt = new BiometricPrompt(this, ContextCompat.getMainExecutor(this),
+                new BiometricPrompt.AuthenticationCallback() {
+                    @Override public void onAuthenticationSucceeded(BiometricPrompt.AuthenticationResult result) {
+                        Cipher authenticated = result.getCryptoObject() == null ? null : result.getCryptoObject().getCipher();
+                        if (authenticated == null) { toast("指纹验证未返回加密凭据"); return; }
+                        success.accept(authenticated);
+                    }
+                    @Override public void onAuthenticationError(int code, CharSequence message) {
+                        if (code != BiometricPrompt.ERROR_USER_CANCELED && code != BiometricPrompt.ERROR_NEGATIVE_BUTTON)
+                            toast("指纹验证失败：" + message);
+                    }
+                });
+        BiometricPrompt.PromptInfo info = new BiometricPrompt.PromptInfo.Builder()
+                .setTitle(title).setSubtitle("使用设备上已录入的指纹")
+                .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
+                .setNegativeButtonText("取消").build();
+        prompt.authenticate(info, new BiometricPrompt.CryptoObject(cipher));
+    }
+
+    private void unlockWithBiometric() {
+        try {
+            if (!deviceUnlock.biometricAvailable(this)) { toast("请先在系统设置中录入指纹"); return; }
+            authenticateBiometric(deviceUnlock.biometricDecryptCipher(), "解锁验证器", cipher -> {
+                try {
+                    String password = deviceUnlock.biometricPassword(cipher);
+                    run(() -> {
+                        try { store.unlock(password); }
+                        catch (Exception error) { deviceUnlock.disableBiometric(); throw error; }
+                    }, () -> { render(); handleIntent(getIntent()); });
+                } catch (Exception error) { deviceUnlock.disableBiometric(); render(); toast("指纹凭据已失效，请用主密码解锁"); }
+            });
+        } catch (Exception error) { deviceUnlock.disableBiometric(); render(); toast("指纹凭据已失效，请用主密码解锁"); }
+    }
+
+    private void toggleDirectUnlock() {
+        if (deviceUnlock.directEnabled()) {
+            deviceUnlock.disableDirect(); captureSettingsDraft(); render(); toast("已关闭免密码进入");
+            return;
+        }
+        askMasterPassword("启用免密码进入", password -> run(() -> deviceUnlock.enableDirect(password), () -> {
+            captureSettingsDraft(); render(); toast("已开启免密码进入");
+        }));
+    }
+
+    private void toggleBiometricUnlock() {
+        if (deviceUnlock.biometricEnabled()) {
+            deviceUnlock.disableBiometric(); captureSettingsDraft(); render(); toast("已关闭指纹解锁");
+            return;
+        }
+        if (!deviceUnlock.biometricAvailable(this)) { toast("请先在系统设置中录入指纹"); return; }
+        askMasterPassword("启用指纹解锁", password -> {
+            try {
+                authenticateBiometric(deviceUnlock.biometricEncryptCipher(), "启用指纹解锁", cipher -> {
+                    try {
+                        deviceUnlock.saveBiometric(cipher, password);
+                        captureSettingsDraft(); render(); toast("已开启指纹解锁");
+                    } catch (Exception error) { deviceUnlock.disableBiometric(); toast("无法保存指纹凭据"); }
+                });
+            } catch (Exception error) { toast("无法启用指纹解锁：" + error.getMessage()); }
+        });
+    }
+
     private void settingsDialog() {
         settingsOpen = true; settingsDraft = null; render();
     }
@@ -624,6 +716,22 @@ public final class MainActivity extends Activity {
         lock.setInputType(InputType.TYPE_CLASS_NUMBER); clip.setInputType(InputType.TYPE_CLASS_NUMBER);
         add(general, muted("填 0 表示关闭对应功能。", 12));
 
+        add(form, sectionTitle("解锁方式"));
+        LinearLayout security = sectionCard(form);
+        add(security, text("指纹解锁", 15, true)); gap(security, 5);
+        add(security, muted(deviceUnlock.biometricEnabled()
+                ? "已开启 · 锁定后可用指纹解锁"
+                : "使用设备指纹解锁保险库", 12)); gap(security, 9);
+        add(security, button(deviceUnlock.biometricEnabled() ? "关闭指纹解锁" : "开启指纹解锁", this::toggleBiometricUnlock));
+        gap(security, 18);
+        add(security, text("免密码进入", 15, true)); gap(security, 5);
+        add(security, muted(deviceUnlock.directEnabled()
+                ? "已开启 · 打开应用时直接进入，自动锁定暂停"
+                : "打开应用时直接进入，无需输入主密码", 12)); gap(security, 9);
+        add(security, button(deviceUnlock.directEnabled() ? "关闭免密码进入" : "开启免密码进入", this::toggleDirectUnlock));
+        gap(security, 8);
+        add(security, muted("开启前需验证主密码。凭据只保存在这台设备的 Android 密钥库中。", 12));
+
         add(form, sectionTitle("WEBDAV 同步"));
         LinearLayout sync = sectionCard(form);
         boolean configured = !current.optString("webdav_url").trim().isEmpty();
@@ -660,9 +768,10 @@ public final class MainActivity extends Activity {
         add(passwordCard, button("更新主密码", () -> {
             String oldValue = old.getText().toString(), newValue = next.getText().toString();
             if (!newValue.equals(confirm.getText().toString())) { toast("两次密码不一致"); return; }
-            run(() -> store.changePassword(oldValue, newValue), () -> {
+            run(() -> { store.changePassword(oldValue, newValue); deviceUnlock.clear(); }, () -> {
                 old.setText(""); next.setText(""); confirm.setText("");
-                toast("主密码已更新，请重新同步其他设备");
+                captureSettingsDraft(); render();
+                toast("主密码已更新；请重新同步其他设备，并按需重新开启快捷解锁");
             });
         }));
         gap(passwordCard, 8); add(passwordCard, muted("修改后需要让其他设备使用新密码重新同步。", 12));

@@ -15,9 +15,28 @@ android {
         targetCompatibility JavaVersion.VERSION_17
     }
     buildFeatures { buildConfig true }
+
+    signingConfigs {
+        stableDebug {
+            def keystorePath = System.getenv('ANDROID_DEBUG_KEYSTORE')
+            if (keystorePath) {
+                storeFile file(keystorePath)
+                storePassword System.getenv('ANDROID_DEBUG_STORE_PASSWORD')
+                keyAlias System.getenv('ANDROID_DEBUG_KEY_ALIAS')
+                keyPassword System.getenv('ANDROID_DEBUG_KEY_PASSWORD')
+            }
+        }
+    }
+    buildTypes {
+        debug {
+            if (System.getenv('ANDROID_DEBUG_KEYSTORE')) signingConfig signingConfigs.stableDebug
+        }
+    }
 }
 
 dependencies {
+    implementation 'androidx.core:core:1.13.1'
+    implementation 'androidx.biometric:biometric:1.1.0'
     implementation 'org.bouncycastle:bcprov-jdk18on:1.78.1'
     implementation 'com.google.zxing:core:3.5.3'
     implementation 'com.journeyapps:zxing-android-embedded:4.3.0'

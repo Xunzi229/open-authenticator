@@ -7,3 +7,5 @@ release/
 android/.gradle/
 android/local.properties
 android/app/build/
+android/*.keystore
+android/*.jks
