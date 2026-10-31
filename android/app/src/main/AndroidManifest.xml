@@ -6,5 +6,6 @@
             <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>
             <intent-filter><action android:name="android.intent.action.VIEW" /><category android:name="android.intent.category.DEFAULT" /><category android:name="android.intent.category.BROWSABLE" /><data android:scheme="otpauth" /><data android:scheme="otpauth-migration" /></intent-filter>
         </activity>
+        <activity android:name=".PortraitScanActivity" android:exported="false" android:screenOrientation="portrait" android:theme="@style/Theme.OpenAuthenticator.Scanner" android:windowSoftInputMode="stateAlwaysHidden" />
     </application>
 </manifest>

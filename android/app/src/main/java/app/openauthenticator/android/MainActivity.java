@@ -84,6 +84,7 @@ public final class MainActivity extends FragmentActivity {
     private String lastCopied;
     private boolean foreground;
     private boolean autoUnlockInProgress;
+    private boolean showCodesByDefault;
 
     interface Task { void run() throws Exception; }
 
@@ -93,6 +94,7 @@ public final class MainActivity extends FragmentActivity {
         store = new VaultStore(this);
         deviceUnlock = new DeviceUnlock(this);
         style = new UiStyle(getPreferences(MODE_PRIVATE).getBoolean("dark_theme", false));
+        showCodesByDefault = getPreferences(MODE_PRIVATE).getBoolean("show_codes_by_default", false);
         root = new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL);
         setContentView(root);
         autoUnlockInProgress = store.exists() && deviceUnlock.directEnabled();
@@ -249,7 +251,7 @@ public final class MainActivity extends FragmentActivity {
         LinearLayout header = row();
         LinearLayout titleBlock = column();
         add(titleBlock, text("验证码", 28, true));
-        TextView subtitle = muted("点验证码显示 · 复制验证码或邮箱", 12);
+        TextView subtitle = muted(showCodesByDefault ? "点验证码复制 · 也可复制邮箱" : "点验证码显示 · 复制验证码或邮箱", 12);
         subtitle.setPadding(0, dp(3), 0, 0); add(titleBlock, subtitle);
         equal(header, titleBlock);
         countdown = new UiStyle.CountdownRing(this, style);
@@ -373,12 +375,12 @@ public final class MainActivity extends FragmentActivity {
         TextView code = text(a.optInt("digits") == 8 ? "•••• ••••" : "••• •••", 18, true);
         code.setTypeface(Typeface.MONOSPACE, Typeface.BOLD); code.setTextColor(style.hidden);
         code.setGravity(Gravity.CENTER); code.setPadding(dp(4), dp(6), dp(2), dp(6)); code.setTag(a);
-        code.setContentDescription("点按显示验证码");
+        code.setContentDescription(showCodesByDefault ? "验证码，点击复制" : "点按显示验证码");
         code.setOnClickListener(v -> {
-            if (revealed.add(a.optString("id"))) showCode(code, a);
-            else copyCode(a);
+            if (showCodesByDefault || !revealed.add(a.optString("id"))) copyCode(a);
+            else showCode(code, a);
         });
-        if (revealed.contains(a.optString("id"))) showCode(code, a);
+        if (showCodesByDefault || revealed.contains(a.optString("id"))) showCode(code, a);
         top.addView(code, new LinearLayout.LayoutParams(-2, -2)); codeViews.add(code);
         add(item, top);
         LinearLayout actions = row(); actions.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
@@ -432,7 +434,7 @@ public final class MainActivity extends FragmentActivity {
                 if (countdown != null) countdown.update();
                 for (TextView code : codeViews) {
                     Object account = code.getTag();
-                    if (account instanceof JSONObject && revealed.contains(((JSONObject) account).optString("id"))) {
+                    if (account instanceof JSONObject && (showCodesByDefault || revealed.contains(((JSONObject) account).optString("id")))) {
                         showCode(code, (JSONObject) account);
                     }
                 }
@@ -493,7 +495,9 @@ public final class MainActivity extends FragmentActivity {
     }
 
     private void scan() {
-        new IntentIntegrator(this).setPrompt("扫描验证器二维码").setBeepEnabled(false).initiateScan();
+        new IntentIntegrator(this).setCaptureActivity(PortraitScanActivity.class)
+                .setOrientationLocked(false).setDesiredBarcodeFormats(IntentIntegrator.QR_CODE)
+                .setPrompt("").setBeepEnabled(false).initiateScan();
     }
 
     private void importDialog() {
@@ -725,6 +729,18 @@ public final class MainActivity extends FragmentActivity {
         light.setTextColor(style.dark ? style.muted : style.text);
         dark.setTextColor(style.dark ? style.text : style.muted);
         equal(themeOptions, light); equal(themeOptions, dark); add(appearance, themeOptions);
+        gap(appearance, 17);
+        CheckBox showCodes = new CheckBox(this); showCodes.setText("默认显示所有验证码");
+        showCodes.setTextSize(15); showCodes.setTextColor(style.text);
+        showCodes.setChecked(showCodesByDefault);
+        showCodes.setButtonTintList(android.content.res.ColorStateList.valueOf(style.accent));
+        showCodes.setOnCheckedChangeListener((button, checked) -> {
+            showCodesByDefault = checked;
+            if (!checked) revealed.clear();
+            getPreferences(MODE_PRIVATE).edit().putBoolean("show_codes_by_default", checked).apply();
+        });
+        add(appearance, showCodes);
+        add(appearance, muted("开启后解锁进入首页即可查看全部动态验证码；此设置只作用于本机。", 12));
 
         JSONObject current = store.settings(); SettingsDraft draft = settingsDraft;
         add(form, sectionTitle("常规"));
