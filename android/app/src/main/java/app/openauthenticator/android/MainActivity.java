@@ -271,8 +271,7 @@ public final class MainActivity extends Activity {
     }
 
     private void scan() {
-        new IntentIntegrator(this).setDesiredBarcodeFormats(IntentIntegrator.QR_CODE_TYPES)
-                .setPrompt("扫描验证器二维码").setBeepEnabled(false).initiateScan();
+        new IntentIntegrator(this).setPrompt("扫描验证器二维码").setBeepEnabled(false).initiateScan();
     }
 
     private void importDialog() {
