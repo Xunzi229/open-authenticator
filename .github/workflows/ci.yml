@@ -89,6 +89,11 @@ jobs:
           ANDROID_DEBUG_KEY_PASSWORD: ${{ secrets.ANDROID_DEBUG_KEY_PASSWORD }}
         run: bash gradlew :app:assembleDebug --stacktrace
 
+      - name: Verify stable APK signature
+        run: |
+          certificate="$($ANDROID_HOME/build-tools/35.0.0/apksigner verify --print-certs android/app/build/outputs/apk/debug/app-debug.apk | sed -n 's/^Signer #1 certificate SHA-256 digest: //p')"
+          test "$certificate" = '6c4def5e5fcec0c48f7ae33d0ba5952c1956acd2a03fb3a11017a02436e4473c' || { echo 'Android signing certificate changed'; exit 1; }
+
       - name: Smoke test Android launch
         if: inputs.emulator
         uses: reactivecircus/android-emulator-runner@v2
