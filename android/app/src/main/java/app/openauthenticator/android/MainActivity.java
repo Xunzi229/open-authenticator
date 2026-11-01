@@ -72,6 +72,11 @@ public final class MainActivity extends FragmentActivity {
     private final List<TextView> codeViews = new ArrayList<>();
     private final Set<String> revealed = new HashSet<>();
     private boolean settingsOpen;
+    private boolean aboutOpen;
+    private int settingsScrollY;
+    private boolean updateChecking;
+    private String updateMessage = "";
+    private UpdateChecker.Result updateResult;
     private SettingsDraft settingsDraft;
     private EditText settingsUrl, settingsUser, settingsPass, settingsPath, settingsLock, settingsClip;
     private CheckBox settingsClearPass;
@@ -119,7 +124,7 @@ public final class MainActivity extends FragmentActivity {
     }
 
     @Override protected void onResume() { super.onResume(); foreground = true; render(); handleIntent(getIntent()); }
-    @Override protected void onPause() { if (settingsOpen) captureSettingsDraft(); foreground = false; super.onPause(); }
+    @Override protected void onPause() { if (settingsOpen && !aboutOpen) captureSettingsDraft(); foreground = false; super.onPause(); }
     @Override protected void onDestroy() { store.lock(); worker.shutdownNow(); super.onDestroy(); }
     @Override protected void onNewIntent(Intent intent) { super.onNewIntent(intent); setIntent(intent); handleIntent(intent); }
     @Override public boolean dispatchTouchEvent(MotionEvent event) {
@@ -130,7 +135,8 @@ public final class MainActivity extends FragmentActivity {
         return super.dispatchTouchEvent(event);
     }
     @Override public void onBackPressed() {
-        if (settingsOpen) { settingsOpen = false; settingsDraft = null; render(); }
+        if (aboutOpen) { aboutOpen = false; render(); }
+        else if (settingsOpen) { settingsOpen = false; settingsDraft = null; render(); }
         else super.onBackPressed();
     }
 
@@ -232,11 +238,11 @@ public final class MainActivity extends FragmentActivity {
             settingsUrl = null; settingsUser = null; settingsPass = null; settingsPath = null;
             settingsLock = null; settingsClip = null; settingsClearPass = null;
         }
-        if (!store.exists()) { settingsOpen = false; settingsDraft = null; authScreen(true); return; }
-        if (!store.unlocked()) { settingsOpen = false; settingsDraft = null; revealed.clear(); authScreen(false); return; }
-        try { store.checkLock(); } catch (Exception error) { settingsOpen = false; settingsDraft = null; revealed.clear(); authScreen(false); return; }
+        if (!store.exists()) { settingsOpen = false; aboutOpen = false; settingsDraft = null; authScreen(true); return; }
+        if (!store.unlocked()) { settingsOpen = false; aboutOpen = false; settingsDraft = null; revealed.clear(); authScreen(false); return; }
+        try { store.checkLock(); } catch (Exception error) { settingsOpen = false; aboutOpen = false; settingsDraft = null; revealed.clear(); authScreen(false); return; }
         autoBiometricPrompted = false;
-        if (settingsOpen) { renderSettingsPage(); return; }
+        if (settingsOpen) { if (aboutOpen) renderAboutPage(); else renderSettingsPage(); return; }
         renderHome();
     }
 
@@ -409,7 +415,6 @@ public final class MainActivity extends FragmentActivity {
         }
         icon(actions, "copy", "复制验证码", false, () -> copyCode(a), 30);
         icon(actions, "qr", "账号二维码", false, () -> showQr(a), 30);
-        icon(actions, "edit", "编辑账号", false, () -> editAccount(a), 30);
         icon(actions, "delete", "删除账号", false, () -> confirmDelete(a), 30);
         add(item, actions);
         return item;
@@ -803,7 +808,7 @@ public final class MainActivity extends FragmentActivity {
     }
 
     private void settingsDialog() {
-        settingsOpen = true; settingsDraft = null; render();
+        settingsOpen = true; aboutOpen = false; settingsScrollY = 0; settingsDraft = null; render();
     }
 
     private void captureSettingsDraft() {
@@ -828,6 +833,7 @@ public final class MainActivity extends FragmentActivity {
         ScrollView scroll = new ScrollView(this); scroll.setVerticalScrollBarEnabled(false);
         LinearLayout form = column(); form.setPadding(0, 0, 0, dp(24)); scroll.addView(form);
         root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
+        scroll.post(() -> scroll.scrollTo(0, settingsScrollY));
 
         add(form, sectionTitle("外观"));
         LinearLayout appearance = sectionCard(form);
@@ -922,8 +928,83 @@ public final class MainActivity extends FragmentActivity {
         }));
         gap(passwordCard, 8); add(passwordCard, muted("修改后需要让其他设备使用新密码重新同步。", 12));
 
+        add(form, sectionTitle("关于"));
+        LinearLayout aboutCard = sectionCard(form);
+        add(aboutCard, text("关于项目", 15, true)); gap(aboutCard, 5);
+        add(aboutCard, muted("版本、检查更新、项目地址与开源许可", 12)); gap(aboutCard, 10);
+        add(aboutCard, button("查看关于项目", () -> {
+            settingsScrollY = scroll.getScrollY(); captureSettingsDraft(); aboutOpen = true; render();
+        }));
+
         gap(root, 10);
         add(root, primaryButton("保存设置", () -> saveSettings(url, user, pass, path, lock, clip, clearPass, null)));
+    }
+
+    private void renderAboutPage() {
+        LinearLayout header = row();
+        icon(header, "back", "返回设置", false, () -> { aboutOpen = false; render(); }, 40);
+        LinearLayout headings = column(); headings.setPadding(dp(6), 0, 0, 0);
+        add(headings, text("关于项目", 25, true)); add(headings, muted("Open Authenticator", 12));
+        equal(header, headings); add(root, header); gap(root, 12);
+
+        ScrollView scroll = new ScrollView(this); scroll.setVerticalScrollBarEnabled(false);
+        LinearLayout form = column(); form.setPadding(0, 0, 0, dp(24)); scroll.addView(form);
+        root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
+
+        add(form, sectionTitle("应用信息"));
+        LinearLayout app = sectionCard(form);
+        add(app, text("验证器", 18, true)); gap(app, 7);
+        add(app, muted("当前版本  v" + BuildConfig.VERSION_NAME, 13));
+
+        add(form, sectionTitle("更新"));
+        LinearLayout updates = sectionCard(form);
+        add(updates, text("检查更新", 15, true)); gap(updates, 6);
+        add(updates, muted(updateMessage.isEmpty() ? "从 GitHub Releases 检查最新正式版本" : updateMessage, 12));
+        gap(updates, 10);
+        Button check = button(updateChecking ? "正在检查…" : "检查更新", this::checkForUpdates);
+        check.setEnabled(!updateChecking); add(updates, check);
+        if (updateResult != null && updateResult.newer) {
+            gap(updates, 9);
+            add(updates, primaryButton("查看 " + updateResult.latestVersion + " Release", () -> openWeb(updateResult.releaseUrl)));
+        }
+
+        add(form, sectionTitle("项目地址"));
+        LinearLayout project = sectionCard(form);
+        add(project, muted(UpdateChecker.PROJECT_URL, 13)); gap(project, 10);
+        add(project, button("打开 GitHub 项目", () -> openWeb(UpdateChecker.PROJECT_URL)));
+
+        add(form, sectionTitle("开源许可"));
+        LinearLayout license = sectionCard(form);
+        add(license, text("MIT License", 15, true)); gap(license, 5);
+        add(license, muted("Copyright © 2026 Xunzi229", 12)); gap(license, 10);
+        add(license, button("查看 MIT 许可全文", () -> openWeb("https://opensource.org/license/mit/")));
+    }
+
+    private void checkForUpdates() {
+        if (updateChecking) return;
+        updateChecking = true; updateMessage = "正在联系 GitHub…"; updateResult = null; render();
+        worker.submit(() -> {
+            try {
+                UpdateChecker.Result found = UpdateChecker.check(BuildConfig.VERSION_NAME);
+                runOnUiThread(() -> {
+                    updateResult = found; updateChecking = false;
+                    updateMessage = found.newer ? "发现新版本 " + found.latestVersion
+                            : "已是最新版本（" + found.latestVersion + "）";
+                    if (aboutOpen) render();
+                });
+            } catch (Exception error) {
+                runOnUiThread(() -> {
+                    updateChecking = false;
+                    updateMessage = "检查失败：" + (error.getMessage() == null ? "请检查网络" : error.getMessage());
+                    if (aboutOpen) render();
+                });
+            }
+        });
+    }
+
+    private void openWeb(String url) {
+        try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url))); }
+        catch (Exception error) { toast("无法打开浏览器"); }
     }
 
     private void setDarkTheme(boolean dark) {
