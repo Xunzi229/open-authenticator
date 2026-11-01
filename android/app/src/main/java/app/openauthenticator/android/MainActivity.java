@@ -752,7 +752,7 @@ public final class MainActivity extends FragmentActivity {
     }
 
     private void migrationDialog() {
-        askMasterPassword("迁移到其他设备", ignored -> {
+        verifyOwner("迁移到其他设备", ignored -> {
             OtpUri.MigrationExport[] export = new OtpUri.MigrationExport[1];
             run(() -> export[0] = OtpUri.migrationExport(store.accounts()), () -> showMigrationPages(export[0]));
         });
@@ -815,7 +815,40 @@ public final class MainActivity extends FragmentActivity {
             catch (Exception ignored) {} }, Math.min(clearSeconds, 86400) * 1000);
     }
 
-    private void askMasterPassword(String title, java.util.function.Consumer<String> action) {
+    private void verifyOwner(String title, java.util.function.Consumer<String> action) {
+        if (deviceUnlock.biometricEnabled() && deviceUnlock.biometricAvailable(this)) {
+            try {
+                authenticateBiometric(deviceUnlock.biometricDecryptCipher(), title, cipher -> {
+                    try {
+                        String password = deviceUnlock.biometricPassword(cipher);
+                        worker.submit(() -> {
+                            try {
+                                store.verifyPassword(password);
+                                runOnUiThread(() -> action.accept(password));
+                            } catch (Exception error) {
+                                runOnUiThread(() -> {
+                                    deviceUnlock.disableBiometric();
+                                    toast("指纹凭据已失效，请使用主密码验证");
+                                    showPasswordVerification(title, action);
+                                });
+                            }
+                        });
+                    } catch (Exception error) {
+                        deviceUnlock.disableBiometric();
+                        toast("指纹凭据已失效，请使用主密码验证");
+                        showPasswordVerification(title, action);
+                    }
+                }, () -> showPasswordVerification(title, action));
+                return;
+            } catch (Exception error) {
+                deviceUnlock.disableBiometric();
+                toast("指纹凭据已失效，请使用主密码验证");
+            }
+        }
+        showPasswordVerification(title, action);
+    }
+
+    private void showPasswordVerification(String title, java.util.function.Consumer<String> action) {
         EditText field = input("当前主密码", "", true);
         LinearLayout content = column(); content.setPadding(dp(20), dp(8), dp(20), 0); add(content, field);
         dialog().setTitle(title).setMessage("请先验证当前主密码")
@@ -827,22 +860,36 @@ public final class MainActivity extends FragmentActivity {
     }
 
     private void authenticateBiometric(Cipher cipher, String title, java.util.function.Consumer<Cipher> success) {
+        authenticateBiometric(cipher, title, success, null);
+    }
+
+    private void authenticateBiometric(Cipher cipher, String title, java.util.function.Consumer<Cipher> success,
+                                       Runnable passwordFallback) {
         BiometricPrompt prompt = new BiometricPrompt(this, ContextCompat.getMainExecutor(this),
                 new BiometricPrompt.AuthenticationCallback() {
                     @Override public void onAuthenticationSucceeded(BiometricPrompt.AuthenticationResult result) {
                         Cipher authenticated = result.getCryptoObject() == null ? null : result.getCryptoObject().getCipher();
-                        if (authenticated == null) { toast("指纹验证未返回加密凭据"); return; }
+                        if (authenticated == null) {
+                            toast("指纹验证未返回加密凭据");
+                            if (passwordFallback != null) passwordFallback.run();
+                            return;
+                        }
                         success.accept(authenticated);
                     }
                     @Override public void onAuthenticationError(int code, CharSequence message) {
-                        if (code != BiometricPrompt.ERROR_USER_CANCELED && code != BiometricPrompt.ERROR_NEGATIVE_BUTTON)
-                            toast("指纹验证失败：" + message);
+                        if (code == BiometricPrompt.ERROR_NEGATIVE_BUTTON && passwordFallback != null) {
+                            passwordFallback.run(); return;
+                        }
+                        if (code == BiometricPrompt.ERROR_USER_CANCELED || code == BiometricPrompt.ERROR_CANCELED
+                                || code == BiometricPrompt.ERROR_NEGATIVE_BUTTON) return;
+                        toast("指纹验证失败：" + message);
+                        if (passwordFallback != null) passwordFallback.run();
                     }
                 });
         BiometricPrompt.PromptInfo info = new BiometricPrompt.PromptInfo.Builder()
                 .setTitle(title).setSubtitle("使用设备上已录入的指纹")
                 .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
-                .setNegativeButtonText("取消").build();
+                .setNegativeButtonText(passwordFallback == null ? "取消" : "使用主密码").build();
         prompt.authenticate(info, new BiometricPrompt.CryptoObject(cipher));
     }
 
@@ -866,7 +913,7 @@ public final class MainActivity extends FragmentActivity {
             deviceUnlock.disableDirect(); captureSettingsDraft(); render(); toast("已关闭免密码进入");
             return;
         }
-        askMasterPassword("启用免密码进入", password -> run(() -> deviceUnlock.enableDirect(password), () -> {
+        verifyOwner("启用免密码进入", password -> run(() -> deviceUnlock.enableDirect(password), () -> {
             captureSettingsDraft(); render(); toast("已开启免密码进入");
         }));
     }
@@ -877,7 +924,7 @@ public final class MainActivity extends FragmentActivity {
             return;
         }
         if (!deviceUnlock.biometricAvailable(this)) { toast("请先在系统设置中录入指纹"); return; }
-        askMasterPassword("启用指纹解锁", password -> {
+        verifyOwner("启用指纹解锁", password -> {
             try {
                 authenticateBiometric(deviceUnlock.biometricEncryptCipher(), "启用指纹解锁", cipher -> {
                     try {
@@ -964,7 +1011,7 @@ public final class MainActivity extends FragmentActivity {
                 : "打开应用时直接进入，无需输入主密码", 12)); gap(security, 9);
         add(security, button(deviceUnlock.directEnabled() ? "关闭免密码进入" : "开启免密码进入", this::toggleDirectUnlock));
         gap(security, 8);
-        add(security, muted("开启前需验证主密码。凭据只保存在这台设备的 Android 密钥库中。", 12));
+        add(security, muted("开启前优先验证已启用的指纹，也可使用主密码。凭据只保存在这台设备的 Android 密钥库中。", 12));
 
         add(form, sectionTitle("WEBDAV 同步"));
         LinearLayout sync = sectionCard(form);
@@ -996,19 +1043,21 @@ public final class MainActivity extends FragmentActivity {
 
         add(form, sectionTitle("主密码"));
         LinearLayout passwordCard = sectionCard(form);
-        EditText old = labeledField(passwordCard, "当前密码", "当前主密码", "", true);
         EditText next = labeledField(passwordCard, "新密码", "至少 8 位", "", true);
         EditText confirm = labeledField(passwordCard, "确认新密码", "再次输入新密码", "", true);
         add(passwordCard, button("更新主密码", () -> {
-            String oldValue = old.getText().toString(), newValue = next.getText().toString();
-            if (!newValue.equals(confirm.getText().toString())) { toast("两次密码不一致"); return; }
-            run(() -> { store.changePassword(oldValue, newValue); deviceUnlock.clear(); }, () -> {
-                old.setText(""); next.setText(""); confirm.setText("");
+            String newValue = next.getText().toString();
+            if (!newValue.equals(confirm.getText().toString())) { confirm.setError("两次密码不一致"); return; }
+            if (newValue.codePointCount(0, newValue.length()) < 8) { next.setError("新密码至少 8 位"); return; }
+            verifyOwner("更新主密码", oldPassword -> run(() -> {
+                store.changePassword(oldPassword, newValue); deviceUnlock.clear();
+            }, () -> {
+                next.setText(""); confirm.setText("");
                 captureSettingsDraft(); render();
                 toast("主密码已更新；请重新同步其他设备，并按需重新开启快捷解锁");
-            });
+            }));
         }));
-        gap(passwordCard, 8); add(passwordCard, muted("修改后需要让其他设备使用新密码重新同步。", 12));
+        gap(passwordCard, 8); add(passwordCard, muted("更新时优先验证已启用的指纹，也可使用当前主密码。修改后需要让其他设备使用新密码重新同步。", 12));
 
         add(form, sectionTitle("关于"));
         LinearLayout aboutCard = sectionCard(form);
