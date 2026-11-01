@@ -36,6 +36,15 @@ pub struct Account {
     pub updated: u64,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AccountEdit {
+    pub issuer: String,
+    pub name: String,
+    pub email: String,
+    pub notes: String,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Settings {
     #[serde(default)]
@@ -393,24 +402,12 @@ impl Vault {
         Ok(n)
     }
 
-    pub fn update(&mut self, id: &str, patch: Account) -> Result<(), String> {
+    pub fn update(&mut self, id: &str, patch: AccountEdit) -> Result<(), String> {
         let mut cur = self.get(id)?;
         cur.issuer = patch.issuer;
         cur.name = patch.name;
         cur.email = patch.email;
         cur.notes = patch.notes;
-        if !patch.algorithm.is_empty() {
-            cur.algorithm = patch.algorithm;
-        }
-        if patch.digits != 0 {
-            cur.digits = patch.digits;
-        }
-        if patch.period != 0 {
-            cur.period = patch.period;
-        }
-        if !patch.secret.trim().is_empty() {
-            cur.secret = patch.secret;
-        }
         normalize(&mut cur)?;
         cur.id = id.to_string();
         let mut payload = self.need()?.clone();
@@ -785,6 +782,38 @@ mod tests {
         invalid_digits.digits = 7;
         assert!(vault.add(invalid_digits).is_err());
         assert!(vault.accounts().unwrap().is_empty());
+    }
+
+    #[test]
+    fn editing_account_changes_only_descriptive_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut vault = Vault::new(dir.path().join("vault.enc"));
+        vault.setup("correct horse", "correct horse").unwrap();
+        let mut original = account("JBSWY3DPEHPK3PXP");
+        original.algorithm = "SHA256".into();
+        original.digits = 8;
+        original.period = 45;
+        let saved = vault.add(original).unwrap();
+
+        let patch: AccountEdit = serde_json::from_value(serde_json::json!({
+            "issuer": "Renamed", "name": "new user", "email": "user@example.com", "notes": "memo"
+        }))
+        .unwrap();
+        vault.update(&saved.id, patch).unwrap();
+        let edited = vault.get(&saved.id).unwrap();
+        assert_eq!(edited.issuer, "Renamed");
+        assert_eq!(edited.name, "new user");
+        assert_eq!(edited.email, "user@example.com");
+        assert_eq!(edited.notes, "memo");
+        assert_eq!(edited.secret, saved.secret);
+        assert_eq!(edited.algorithm, saved.algorithm);
+        assert_eq!(edited.digits, saved.digits);
+        assert_eq!(edited.period, saved.period);
+        assert!(serde_json::from_value::<AccountEdit>(serde_json::json!({
+            "issuer": "Renamed", "name": "new user", "email": "", "notes": "",
+            "secret": "JBSWY3DPEHPK3PXP"
+        }))
+        .is_err());
     }
 
     #[test]

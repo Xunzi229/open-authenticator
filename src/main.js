@@ -410,7 +410,8 @@ function openEditor(acc) {
     ${field('name', '用户名', a.name)}
     ${field('email', '邮箱', a.email)}
     <label>备注<textarea name="notes">${esc(a.notes)}</textarea></label>
-    ${field('secret', acc ? '密钥（留空则不改）' : '密钥', acc ? '' : a.secret, 'spellcheck="false" autocomplete="off"')}
+    ${acc ? '' : `
+    ${field('secret', '密钥', a.secret, 'spellcheck="false" autocomplete="off"')}
     <label>算法<select name="algorithm">
       <option ${a.algorithm === 'SHA1' ? 'selected' : ''}>SHA1</option>
       <option ${a.algorithm === 'SHA256' ? 'selected' : ''}>SHA256</option>
@@ -419,7 +420,7 @@ function openEditor(acc) {
     <div class="grid-2">
       ${field('digits', '位数', a.digits, 'type="number" min="6" max="8" step="2"')}
       ${field('period', '周期（秒）', a.period || 30, 'type="number" min="1" max="86400"')}
-    </div>
+    </div>`}
     ${acc ? '<button type="button" class="link-btn" id="btn-show-qr">显示二维码</button>' : ''}
     <p class="err" id="form-err"></p>
     <div class="row-btns">
@@ -433,14 +434,7 @@ function openEditor(acc) {
     const data = Object.fromEntries([...$('sheet').querySelectorAll('input,textarea,select')].map((n) => [n.name, ['digits', 'period'].includes(n.name) ? Number(n.value) : n.value]))
     try {
       if (acc) {
-        if (String(data.secret || '').trim()) {
-          const ok = await askAuth('更改密钥需要验证主密码', (password, biometric) =>
-            call('update_account', { id: acc.id, data, password, biometric })
-          )
-          if (!ok) return
-        } else {
-          await call('update_account', { id: acc.id, data, password: '', biometric: false })
-        }
+        await call('update_account', { id: acc.id, data })
       } else {
         await call('add_account', { data })
       }

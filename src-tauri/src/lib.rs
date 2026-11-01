@@ -19,7 +19,7 @@ use serde_json::{json, Value};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Manager, State, WebviewWindow};
-use vault::{Account, Vault, MIN_PASSWORD};
+use vault::{Account, AccountEdit, Vault, MIN_PASSWORD};
 use zeroize::{Zeroize, Zeroizing};
 
 static QUITTING: AtomicBool = AtomicBool::new(false);
@@ -255,24 +255,14 @@ fn add_account(state: State<AppState>, data: Value) -> Result<Value, String> {
 }
 
 #[tauri::command]
-fn update_account(
-    window: WebviewWindow,
-    state: State<AppState>,
-    id: String,
-    data: Value,
-    password: String,
-    biometric: bool,
-) -> Result<Value, String> {
-    let mut v = state.vault.lock().map_err(|e| e.to_string())?;
-    if !data["secret"].as_str().unwrap_or("").trim().is_empty() {
-        drop(v);
-        let pw = resolve_password(&window, password, biometric, "验证身份以更改密钥")?;
-        let mut v = state.vault.lock().map_err(|e| e.to_string())?;
-        v.verify_password(&pw)?;
-        v.update(&id, account_from(data))?;
-        return ok(json!({}));
-    }
-    v.update(&id, account_from(data))?;
+fn update_account(state: State<AppState>, id: String, data: Value) -> Result<Value, String> {
+    let patch: AccountEdit = serde_json::from_value(data)
+        .map_err(|_| "只能修改发行方、用户名、邮箱和备注".to_string())?;
+    state
+        .vault
+        .lock()
+        .map_err(|e| e.to_string())?
+        .update(&id, patch)?;
     ok(json!({}))
 }
 
