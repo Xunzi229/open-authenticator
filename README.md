@@ -17,6 +17,15 @@
 - HTTPS WebDAV 同步密文（拉取前会在本地保留一份加密备份）
 - 独立目录的 [Android 应用](android/README.md)，支持扫码添加并在新增账号后自动上传 WebDAV
 
+## Android 界面示例
+
+截图来自独立的演示应用，使用虚构账号和公开测试密钥；邮箱均已遮盖，二维码不含真实账号。正式应用仍禁止系统截图。
+
+|  |  |  |
+| :---: | :---: | :---: |
+| **验证码首页**<br><img src="docs/screenshots/android/home.png" alt="Android 验证码首页" width="220"> | **深色主题**<br><img src="docs/screenshots/android/home-dark.png" alt="Android 深色主题" width="220"> | **扫码添加**<br><img src="docs/screenshots/android/scan.png" alt="Android 扫码页面" width="220"> |
+| **外观与解锁**<br><img src="docs/screenshots/android/settings.png" alt="Android 外观与解锁设置" width="220"> | **WebDAV 同步**<br><img src="docs/screenshots/android/settings-sync.png" alt="Android WebDAV 同步设置" width="220"> | **关于项目**<br><img src="docs/screenshots/android/about.png" alt="Android 关于项目页面" width="220"> |
+
 ## 安装
 
 从 [Releases](https://github.com/Xunzi229/open-authenticator/releases/latest) 下载对应平台的安装包：
