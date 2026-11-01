@@ -12,6 +12,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.text.InputType;
+import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
@@ -393,17 +394,22 @@ public final class MainActivity extends FragmentActivity {
             add(meta, emailView);
         }
         top.addView(meta, new LinearLayout.LayoutParams(0, -2, 1));
-        TextView code = text(a.optInt("digits") == 8 ? "•••• ••••" : "••• •••", 18, true);
+        add(item, top);
+        TextView code = text(a.optInt("digits") == 8 ? "•••• ••••" : "••• •••", 32, true);
         code.setTypeface(Typeface.MONOSPACE, Typeface.BOLD); code.setTextColor(style.hidden);
-        code.setGravity(Gravity.CENTER); code.setPadding(dp(4), dp(6), dp(2), dp(6)); code.setTag(a);
+        code.setSingleLine(true);
+        code.setAutoSizeTextTypeUniformWithConfiguration(24, 32, 2, TypedValue.COMPLEX_UNIT_SP);
+        code.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
+        code.setPadding(0, dp(5), 0, dp(5)); code.setMinHeight(dp(54)); code.setTag(a);
         code.setContentDescription(showCodesByDefault ? "验证码，点击复制" : "点按显示验证码");
         code.setOnClickListener(v -> {
             if (showCodesByDefault || !revealed.add(a.optString("id"))) copyCode(a);
             else showCode(code, a);
         });
         if (showCodesByDefault || revealed.contains(a.optString("id"))) showCode(code, a);
-        top.addView(code, new LinearLayout.LayoutParams(-2, -2)); codeViews.add(code);
-        add(item, top);
+        LinearLayout.LayoutParams codeLayout = new LinearLayout.LayoutParams(-1, -2);
+        codeLayout.leftMargin = dp(45);
+        item.addView(code, codeLayout); codeViews.add(code);
         LinearLayout actions = row(); actions.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
         String notes = a.optString("notes");
         if (!notes.isEmpty()) {
