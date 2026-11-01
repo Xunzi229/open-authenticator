@@ -17,6 +17,7 @@ import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewConfiguration;
+import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
@@ -93,6 +94,7 @@ public final class MainActivity extends FragmentActivity {
     private boolean autoUnlockInProgress;
     private boolean showCodesByDefault;
     private boolean autoBiometricPrompted;
+    private int openDialogs;
 
     interface Task { void run() throws Exception; }
 
@@ -161,10 +163,23 @@ public final class MainActivity extends FragmentActivity {
         getWindow().getDecorView().setSystemUiVisibility(style.dark ? 0 : View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
     }
     private void toast(String message) { Toast.makeText(this, message, Toast.LENGTH_LONG).show(); }
+    private void updateScreenshotProtection() {
+        boolean homePage = store != null && store.unlocked() && !settingsOpen && !aboutOpen
+                && !autoUnlockInProgress;
+        if (root != null) root.setVisibility(homePage && openDialogs > 0 ? View.INVISIBLE : View.VISIBLE);
+        if (homePage && openDialogs == 0) getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
+        else getWindow().clearFlags(WindowManager.LayoutParams.FLAG_SECURE);
+    }
     private AlertDialog.Builder dialog() {
+        openDialogs++;
+        updateScreenshotProtection();
         return new AlertDialog.Builder(this, style.dark
                 ? android.R.style.Theme_Material_Dialog_Alert
-                : android.R.style.Theme_Material_Light_Dialog_Alert);
+                : android.R.style.Theme_Material_Light_Dialog_Alert)
+                .setOnDismissListener(ignored -> {
+                    openDialogs--;
+                    updateScreenshotProtection();
+                });
     }
     private void showSaveResult(String message) {
         if (message.contains("同步失败") || message.contains("同步标记保存失败")) {
@@ -230,6 +245,8 @@ public final class MainActivity extends FragmentActivity {
     }
 
     private void render() {
+        getWindow().clearFlags(WindowManager.LayoutParams.FLAG_SECURE);
+        root.setVisibility(View.VISIBLE);
         root.removeAllViews();
         root.setPadding(dp(16), dp(14), dp(16), dp(12)); applyWindowColors();
         codeViews.clear(); countdown = null; body = null;
@@ -244,6 +261,7 @@ public final class MainActivity extends FragmentActivity {
         autoBiometricPrompted = false;
         if (settingsOpen) { if (aboutOpen) renderAboutPage(); else renderSettingsPage(); return; }
         renderHome();
+        updateScreenshotProtection();
     }
 
     private void unlockingScreen() {
