@@ -416,7 +416,6 @@ public final class MainActivity extends FragmentActivity {
             noteView.setEllipsize(android.text.TextUtils.TruncateAt.END); add(meta, noteView);
         }
         top.addView(meta, new LinearLayout.LayoutParams(0, -2, 1));
-        icon(top, "copy", "复制验证码", false, () -> copyCode(a), 30);
         icon(top, "qr", "账号二维码", false, () -> showQr(a), 30);
         add(item, top);
         TextView code = text(a.optInt("digits") == 8 ? "•••• ••••" : "••• •••", 32, true);
@@ -431,9 +430,12 @@ public final class MainActivity extends FragmentActivity {
             else showCode(code, a);
         });
         if (showCodesByDefault || revealed.contains(a.optString("id"))) showCode(code, a);
+        LinearLayout codeRow = row();
+        codeRow.addView(code, new LinearLayout.LayoutParams(0, -2, 1));
+        icon(codeRow, "copy", "复制验证码", false, () -> copyCode(a), 30);
         LinearLayout.LayoutParams codeLayout = new LinearLayout.LayoutParams(-1, -2);
         codeLayout.leftMargin = dp(45);
-        item.addView(code, codeLayout); codeViews.add(code);
+        item.addView(codeRow, codeLayout); codeViews.add(code);
         return new SwipeAccountLayout(item, a, title);
     }
 
