@@ -16,6 +16,7 @@ import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.ViewConfiguration;
 import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.CheckBox;
@@ -374,7 +375,7 @@ public final class MainActivity extends FragmentActivity {
         } catch (Exception error) { toast("无法显示账号"); }
     }
 
-    private LinearLayout accountRow(JSONObject a) {
+    private View accountRow(JSONObject a) {
         LinearLayout item = column(); item.setPadding(dp(12), dp(12), dp(10), dp(8));
         LinearLayout top = row();
         String issuer = a.optString("issuer"), name = a.optString("name"), email = a.optString("email");
@@ -421,9 +422,84 @@ public final class MainActivity extends FragmentActivity {
         }
         icon(actions, "copy", "复制验证码", false, () -> copyCode(a), 30);
         icon(actions, "qr", "账号二维码", false, () -> showQr(a), 30);
-        icon(actions, "delete", "删除账号", false, () -> confirmDelete(a), 30);
         add(item, actions);
-        return item;
+        return new SwipeAccountLayout(item, a, title);
+    }
+
+    private final class SwipeAccountLayout extends FrameLayout {
+        private final View content;
+        private final JSONObject account;
+        private final int touchSlop;
+        private float startX, startY;
+        private boolean swiping;
+
+        SwipeAccountLayout(View content, JSONObject account, String title) {
+            super(MainActivity.this);
+            this.content = content;
+            this.account = account;
+            touchSlop = ViewConfiguration.get(MainActivity.this).getScaledTouchSlop();
+            setClipChildren(true);
+            setClickable(true);
+            setContentDescription(title + "，右滑编辑，左滑移除");
+            TextView edit = text("编辑", 14, true);
+            edit.setTextColor(Color.WHITE); edit.setGravity(Gravity.CENTER);
+            edit.setBackgroundColor(style.accent);
+            addView(edit, new FrameLayout.LayoutParams(dp(88), -1, Gravity.START));
+            TextView remove = text("移除", 14, true);
+            remove.setTextColor(Color.WHITE); remove.setGravity(Gravity.CENTER);
+            remove.setBackgroundColor(style.danger);
+            addView(remove, new FrameLayout.LayoutParams(dp(88), -1, Gravity.END));
+            content.setBackgroundColor(style.surface);
+            addView(content, new FrameLayout.LayoutParams(-1, -2));
+        }
+
+        @Override public boolean onInterceptTouchEvent(MotionEvent event) {
+            switch (event.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    startX = event.getX(); startY = event.getY(); swiping = false;
+                    break;
+                case MotionEvent.ACTION_MOVE:
+                    float dx = event.getX() - startX, dy = event.getY() - startY;
+                    if (Math.abs(dx) > touchSlop && Math.abs(dx) > Math.abs(dy) * 1.4f) {
+                        swiping = true;
+                        getParent().requestDisallowInterceptTouchEvent(true);
+                        return true;
+                    }
+                    break;
+            }
+            return false;
+        }
+
+        @Override public boolean onTouchEvent(MotionEvent event) {
+            switch (event.getActionMasked()) {
+                case MotionEvent.ACTION_MOVE:
+                    if (swiping) {
+                        float dx = event.getX() - startX;
+                        content.setTranslationX(Math.max(-dp(88), Math.min(dp(88), dx)));
+                        return true;
+                    }
+                    break;
+                case MotionEvent.ACTION_UP:
+                    if (swiping) {
+                        float distance = content.getTranslationX();
+                        content.animate().translationX(0).setDuration(140).withEndAction(() -> {
+                            if (distance <= -dp(64)) confirmDelete(account);
+                            else if (distance >= dp(64)) editAccount(account);
+                        }).start();
+                        swiping = false;
+                        return true;
+                    }
+                    break;
+                case MotionEvent.ACTION_CANCEL:
+                    if (swiping) {
+                        content.animate().translationX(0).setDuration(140).start();
+                        swiping = false;
+                        return true;
+                    }
+                    break;
+            }
+            return super.onTouchEvent(event);
+        }
     }
 
     private int emailColor(String email) {
@@ -516,33 +592,29 @@ public final class MainActivity extends FragmentActivity {
 
     private void editAccount(JSONObject existing) {
         LinearLayout form = column(); form.setPadding(dp(18), dp(8), dp(18), dp(8));
-        EditText issuer = labeledField(form, "发行方", "例如 OpenAI", existing.optString("issuer"), false);
-        EditText name = labeledField(form, "名称或账号", "账号名称", existing.optString("name"), false);
+        EditText name = labeledField(form, "账号名称", "账号名称", existing.optString("name"), false);
         EditText email = labeledField(form, "邮箱", "可选", existing.optString("email"), false);
-        EditText notes = labeledField(form, "备注", "可选", existing.optString("notes"), false);
-        EditText secret = labeledField(form, "Base32 密钥", "粘贴密钥", existing.optString("secret"), false);
-        EditText algorithm = labeledField(form, "算法", "SHA1 / SHA256 / SHA512", existing.optString("algorithm"), false);
-        EditText digits = labeledField(form, "验证码位数", "6 或 8", String.valueOf(existing.optInt("digits")), false);
-        EditText period = labeledField(form, "周期（秒）", "30", String.valueOf(existing.optLong("period")), false);
-        digits.setInputType(InputType.TYPE_CLASS_NUMBER); period.setInputType(InputType.TYPE_CLASS_NUMBER);
+        EditText issuer = labeledField(form, "分组", "例如 OpenAI", existing.optString("issuer"), false);
         ScrollView scroll = new ScrollView(this); scroll.addView(form);
-        dialog().setTitle("编辑账号").setView(scroll)
-                .setNegativeButton("取消", null).setPositiveButton("保存", (dialog, which) -> {
-                    String issuerValue = issuer.getText().toString(), nameValue = name.getText().toString();
-                    String emailValue = email.getText().toString(), notesValue = notes.getText().toString();
-                    String secretValue = secret.getText().toString(), algorithmValue = algorithm.getText().toString();
-                    String digitsValue = digits.getText().toString(), periodValue = period.getText().toString();
+        AlertDialog popup = dialog().setTitle("编辑账号").setView(scroll)
+                .setNegativeButton("取消", null).setPositiveButton("保存", null).create();
+        popup.setOnShowListener(dialog -> popup.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(view -> {
+                    String issuerValue = issuer.getText().toString().trim();
+                    String nameValue = name.getText().toString().trim();
+                    String emailValue = email.getText().toString().trim();
+                    if (issuerValue.isEmpty() && nameValue.isEmpty()) {
+                        name.setError("请填写账号名称或分组"); return;
+                    }
+                    popup.dismiss();
                     String[] message = new String[1];
                     run(() -> {
-                    JSONObject a = new JSONObject(existing.toString());
-                    a.put("issuer", issuerValue).put("name", nameValue).put("email", emailValue)
-                            .put("notes", notesValue).put("secret", secretValue)
-                            .put("algorithm", algorithmValue).put("digits", Integer.parseInt(digitsValue))
-                            .put("period", Long.parseLong(periodValue));
-                    store.upsert(a);
-                    message[0] = "账号已保存；编辑后的内容可在设置中上传";
+                        JSONObject a = new JSONObject(existing.toString());
+                        a.put("issuer", issuerValue).put("name", nameValue).put("email", emailValue);
+                        store.upsert(a);
+                        message[0] = "账号已保存；编辑后的内容可在设置中上传";
                     }, () -> { render(); showSaveResult(message[0]); });
-                }).show();
+                }));
+        popup.show();
     }
 
     private void confirmDelete(JSONObject a) {
