@@ -17,7 +17,6 @@ import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewConfiguration;
-import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
@@ -99,7 +98,6 @@ public final class MainActivity extends FragmentActivity {
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
-        getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
         store = new VaultStore(this);
         deviceUnlock = new DeviceUnlock(this);
         style = new UiStyle(getPreferences(MODE_PRIVATE).getBoolean("dark_theme", false));
