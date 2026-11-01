@@ -12,13 +12,16 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.text.InputType;
+import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.ViewConfiguration;
 import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
+import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -59,7 +62,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public final class MainActivity extends FragmentActivity {
-    private static final int PICK_IMAGE = 1, PICK_TEXT = 2, SAVE_TEXT = 3;
+    private static final int PICK_IMAGE = 1, PICK_TEXT = 2, SAVE_IMAGE = 3;
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private final Handler handler = new Handler(Looper.getMainLooper());
     private VaultStore store;
@@ -71,6 +74,11 @@ public final class MainActivity extends FragmentActivity {
     private final List<TextView> codeViews = new ArrayList<>();
     private final Set<String> revealed = new HashSet<>();
     private boolean settingsOpen;
+    private boolean aboutOpen;
+    private int settingsScrollY;
+    private boolean updateChecking;
+    private String updateMessage = "";
+    private UpdateChecker.Result updateResult;
     private SettingsDraft settingsDraft;
     private EditText settingsUrl, settingsUser, settingsPass, settingsPath, settingsLock, settingsClip;
     private CheckBox settingsClearPass;
@@ -80,11 +88,12 @@ public final class MainActivity extends FragmentActivity {
         String url, user, pass, path, lock, clip;
         boolean clearPass;
     }
-    private String exportText;
+    private Bitmap pendingExportImage;
     private String lastCopied;
     private boolean foreground;
     private boolean autoUnlockInProgress;
     private boolean showCodesByDefault;
+    private boolean autoBiometricPrompted;
 
     interface Task { void run() throws Exception; }
 
@@ -117,7 +126,7 @@ public final class MainActivity extends FragmentActivity {
     }
 
     @Override protected void onResume() { super.onResume(); foreground = true; render(); handleIntent(getIntent()); }
-    @Override protected void onPause() { if (settingsOpen) captureSettingsDraft(); foreground = false; super.onPause(); }
+    @Override protected void onPause() { if (settingsOpen && !aboutOpen) captureSettingsDraft(); foreground = false; super.onPause(); }
     @Override protected void onDestroy() { store.lock(); worker.shutdownNow(); super.onDestroy(); }
     @Override protected void onNewIntent(Intent intent) { super.onNewIntent(intent); setIntent(intent); handleIntent(intent); }
     @Override public boolean dispatchTouchEvent(MotionEvent event) {
@@ -128,7 +137,8 @@ public final class MainActivity extends FragmentActivity {
         return super.dispatchTouchEvent(event);
     }
     @Override public void onBackPressed() {
-        if (settingsOpen) { settingsOpen = false; settingsDraft = null; render(); }
+        if (aboutOpen) { aboutOpen = false; render(); }
+        else if (settingsOpen) { settingsOpen = false; settingsDraft = null; render(); }
         else super.onBackPressed();
     }
 
@@ -202,9 +212,6 @@ public final class MainActivity extends FragmentActivity {
         });
         return field;
     }
-    private EditText multiline(String hint, String value) {
-        EditText field = input(hint, value, false); field.setSingleLine(false); field.setMinLines(3); return field;
-    }
     private LinearLayout column() { LinearLayout c = new LinearLayout(this); c.setOrientation(LinearLayout.VERTICAL); return c; }
     private LinearLayout row() { LinearLayout r = new LinearLayout(this); r.setOrientation(LinearLayout.HORIZONTAL); r.setGravity(Gravity.CENTER_VERTICAL); return r; }
     private void add(LinearLayout parent, View child) { parent.addView(child, new LinearLayout.LayoutParams(-1, -2)); }
@@ -233,10 +240,11 @@ public final class MainActivity extends FragmentActivity {
             settingsUrl = null; settingsUser = null; settingsPass = null; settingsPath = null;
             settingsLock = null; settingsClip = null; settingsClearPass = null;
         }
-        if (!store.exists()) { settingsOpen = false; settingsDraft = null; authScreen(true); return; }
-        if (!store.unlocked()) { settingsOpen = false; settingsDraft = null; revealed.clear(); authScreen(false); return; }
-        try { store.checkLock(); } catch (Exception error) { settingsOpen = false; settingsDraft = null; revealed.clear(); authScreen(false); return; }
-        if (settingsOpen) { renderSettingsPage(); return; }
+        if (!store.exists()) { settingsOpen = false; aboutOpen = false; settingsDraft = null; authScreen(true); return; }
+        if (!store.unlocked()) { settingsOpen = false; aboutOpen = false; settingsDraft = null; revealed.clear(); authScreen(false); return; }
+        try { store.checkLock(); } catch (Exception error) { settingsOpen = false; aboutOpen = false; settingsDraft = null; revealed.clear(); authScreen(false); return; }
+        autoBiometricPrompted = false;
+        if (settingsOpen) { if (aboutOpen) renderAboutPage(); else renderSettingsPage(); return; }
         renderHome();
     }
 
@@ -266,16 +274,24 @@ public final class MainActivity extends FragmentActivity {
         search.setPadding(dp(5), 0, 0, 0); search.setTextSize(15);
         searchBox.addView(search, new LinearLayout.LayoutParams(0, dp(40), 1));
         toolbar.addView(searchBox, new LinearLayout.LayoutParams(0, dp(40), 1));
-        icon(toolbar, "scan", "扫码添加", true, this::scan, 40);
-        icon(toolbar, "plus", "手动添加", true, () -> editAccount(null), 40);
-        icon(toolbar, "upload", "导入导出", true, this::menu, 40);
+        icon(toolbar, "plus", "手动添加", true, this::addAccount, 40);
+        icon(toolbar, "upload", "导入与迁移", true, this::menu, 40);
         icon(toolbar, "settings", "设置", true, this::settingsDialog, 40);
         add(root, toolbar); gap(root, 12);
 
         ScrollView scroll = new ScrollView(this); scroll.setFillViewport(true);
         scroll.setVerticalScrollBarEnabled(false);
-        body = column(); body.setPadding(0, 0, 0, dp(24)); scroll.addView(body);
-        root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
+        body = column(); body.setPadding(0, 0, 0, dp(92)); scroll.addView(body);
+        FrameLayout content = new FrameLayout(this);
+        content.addView(scroll, new FrameLayout.LayoutParams(-1, -1));
+        UiStyle.IconButton scanButton = new UiStyle.IconButton(this, style, "scan", "扫码添加", false, this::scan, Color.WHITE);
+        android.graphics.drawable.GradientDrawable circle = new android.graphics.drawable.GradientDrawable();
+        circle.setShape(android.graphics.drawable.GradientDrawable.OVAL); circle.setColor(style.accent);
+        scanButton.setBackground(circle); scanButton.setElevation(dp(7));
+        FrameLayout.LayoutParams scanParams = new FrameLayout.LayoutParams(dp(58), dp(58), Gravity.END | Gravity.BOTTOM);
+        scanParams.rightMargin = dp(12); scanParams.bottomMargin = dp(20);
+        content.addView(scanButton, scanParams);
+        root.addView(content, new LinearLayout.LayoutParams(-1, 0, 1));
         search.addTextChangedListener(new android.text.TextWatcher() {
             public void beforeTextChanged(CharSequence s, int st, int c, int a) {}
             public void onTextChanged(CharSequence s, int st, int before, int count) { query = s.toString(); fillAccounts(query); }
@@ -308,6 +324,13 @@ public final class MainActivity extends FragmentActivity {
         if (!setup && deviceUnlock.biometricEnabled()) {
             gap(card, 10);
             add(card, button("使用指纹解锁", this::unlockWithBiometric));
+            if (!deviceUnlock.directEnabled() && !autoBiometricPrompted && foreground) {
+                autoBiometricPrompted = true;
+                root.post(() -> {
+                    if (!isFinishing() && !store.unlocked() && deviceUnlock.biometricEnabled()
+                            && !deviceUnlock.directEnabled()) unlockWithBiometric();
+                });
+            }
         }
         if (setup) { gap(card, 10); add(card, button("从 WebDAV 恢复", this::restoreDialog)); }
     }
@@ -344,15 +367,15 @@ public final class MainActivity extends FragmentActivity {
                 boolean hasAccounts = accounts.length() > 0;
                 TextView title = text(hasAccounts ? "没有匹配账号" : "还没有账号", 17, true);
                 title.setGravity(Gravity.CENTER); add(empty, title); gap(empty, 6);
-                TextView hint = muted(hasAccounts ? "换个关键词试试" : "扫码或手动添加 TOTP 账号", 13);
+                TextView hint = muted(hasAccounts ? "换个关键词试试" : "点右下角扫码按钮，或手动添加 TOTP 账号", 13);
                 hint.setGravity(Gravity.CENTER); add(empty, hint);
                 gap(empty, 18);
-                add(empty, primaryButton(hasAccounts ? "清除搜索" : "扫码添加", hasAccounts ? () -> search.setText("") : this::scan));
+                add(empty, primaryButton(hasAccounts ? "清除搜索" : "手动添加", hasAccounts ? () -> search.setText("") : this::addAccount));
             }
         } catch (Exception error) { toast("无法显示账号"); }
     }
 
-    private LinearLayout accountRow(JSONObject a) {
+    private View accountRow(JSONObject a) {
         LinearLayout item = column(); item.setPadding(dp(12), dp(12), dp(10), dp(8));
         LinearLayout top = row();
         String issuer = a.optString("issuer"), name = a.optString("name"), email = a.optString("email");
@@ -372,17 +395,22 @@ public final class MainActivity extends FragmentActivity {
             add(meta, emailView);
         }
         top.addView(meta, new LinearLayout.LayoutParams(0, -2, 1));
-        TextView code = text(a.optInt("digits") == 8 ? "•••• ••••" : "••• •••", 18, true);
+        add(item, top);
+        TextView code = text(a.optInt("digits") == 8 ? "•••• ••••" : "••• •••", 32, true);
         code.setTypeface(Typeface.MONOSPACE, Typeface.BOLD); code.setTextColor(style.hidden);
-        code.setGravity(Gravity.CENTER); code.setPadding(dp(4), dp(6), dp(2), dp(6)); code.setTag(a);
+        code.setSingleLine(true);
+        code.setAutoSizeTextTypeUniformWithConfiguration(24, 32, 2, TypedValue.COMPLEX_UNIT_SP);
+        code.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
+        code.setPadding(0, dp(5), 0, dp(5)); code.setMinHeight(dp(54)); code.setTag(a);
         code.setContentDescription(showCodesByDefault ? "验证码，点击复制" : "点按显示验证码");
         code.setOnClickListener(v -> {
             if (showCodesByDefault || !revealed.add(a.optString("id"))) copyCode(a);
             else showCode(code, a);
         });
         if (showCodesByDefault || revealed.contains(a.optString("id"))) showCode(code, a);
-        top.addView(code, new LinearLayout.LayoutParams(-2, -2)); codeViews.add(code);
-        add(item, top);
+        LinearLayout.LayoutParams codeLayout = new LinearLayout.LayoutParams(-1, -2);
+        codeLayout.leftMargin = dp(45);
+        item.addView(code, codeLayout); codeViews.add(code);
         LinearLayout actions = row(); actions.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
         String notes = a.optString("notes");
         if (!notes.isEmpty()) {
@@ -394,10 +422,88 @@ public final class MainActivity extends FragmentActivity {
         }
         icon(actions, "copy", "复制验证码", false, () -> copyCode(a), 30);
         icon(actions, "qr", "账号二维码", false, () -> showQr(a), 30);
-        icon(actions, "edit", "编辑账号", false, () -> editAccount(a), 30);
-        icon(actions, "delete", "删除账号", false, () -> confirmDelete(a), 30);
         add(item, actions);
-        return item;
+        return new SwipeAccountLayout(item, a, title);
+    }
+
+    private final class SwipeAccountLayout extends FrameLayout {
+        private final View content;
+        private final JSONObject account;
+        private final int touchSlop;
+        private float startX, startY;
+        private boolean swiping;
+
+        SwipeAccountLayout(View content, JSONObject account, String title) {
+            super(MainActivity.this);
+            this.content = content;
+            this.account = account;
+            touchSlop = ViewConfiguration.get(MainActivity.this).getScaledTouchSlop();
+            setClipChildren(true);
+            setClickable(true);
+            setContentDescription(title + "，右滑编辑，左滑移除");
+            LinearLayout actions = row();
+            TextView edit = text("编辑", 14, true);
+            edit.setTextColor(Color.WHITE); edit.setGravity(Gravity.CENTER);
+            edit.setBackgroundColor(style.accent);
+            actions.addView(edit, new LinearLayout.LayoutParams(0, -1, 1));
+            TextView remove = text("移除", 14, true);
+            remove.setTextColor(Color.WHITE); remove.setGravity(Gravity.CENTER);
+            remove.setBackgroundColor(style.danger);
+            actions.addView(remove, new LinearLayout.LayoutParams(0, -1, 1));
+            addView(actions, new FrameLayout.LayoutParams(-1, -1));
+            content.setBackgroundColor(style.surface);
+            addView(content, new FrameLayout.LayoutParams(-1, -2));
+        }
+
+        @Override public boolean onInterceptTouchEvent(MotionEvent event) {
+            switch (event.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    startX = event.getX(); startY = event.getY(); swiping = false;
+                    break;
+                case MotionEvent.ACTION_MOVE:
+                    float dx = event.getX() - startX, dy = event.getY() - startY;
+                    if (Math.abs(dx) > touchSlop && Math.abs(dx) > Math.abs(dy) * 1.4f) {
+                        swiping = true;
+                        getParent().requestDisallowInterceptTouchEvent(true);
+                        return true;
+                    }
+                    break;
+            }
+            return false;
+        }
+
+        @Override public boolean onTouchEvent(MotionEvent event) {
+            switch (event.getActionMasked()) {
+                case MotionEvent.ACTION_MOVE:
+                    if (swiping) {
+                        float dx = event.getX() - startX;
+                        float limit = getWidth() / 2f;
+                        content.setTranslationX(Math.max(-limit, Math.min(limit, dx)));
+                        return true;
+                    }
+                    break;
+                case MotionEvent.ACTION_UP:
+                    if (swiping) {
+                        float distance = event.getX() - startX;
+                        float required = getWidth() / 2f;
+                        content.animate().translationX(0).setDuration(140).withEndAction(() -> {
+                            if (distance <= -required) confirmDelete(account);
+                            else if (distance >= required) editAccount(account);
+                        }).start();
+                        swiping = false;
+                        return true;
+                    }
+                    break;
+                case MotionEvent.ACTION_CANCEL:
+                    if (swiping) {
+                        content.animate().translationX(0).setDuration(140).start();
+                        swiping = false;
+                        return true;
+                    }
+                    break;
+            }
+            return super.onTouchEvent(event);
+        }
     }
 
     private int emailColor(String email) {
@@ -443,35 +549,76 @@ public final class MainActivity extends FragmentActivity {
         handler.postDelayed(this::tick, 1000);
     }
 
+    private void addAccount() {
+        LinearLayout form = column(); form.setPadding(dp(18), dp(8), dp(18), dp(10));
+        add(form, muted("输入账号名称和设置密钥，即可添加标准时间验证码。", 13)); gap(form, 16);
+        EditText name = labeledField(form, "账号名称", "例如 GitHub:you@example.com", "", false);
+        EditText secret = labeledField(form, "设置密钥", "粘贴 Base32 密钥", "", false);
+        secret.setSingleLine(false);
+        secret.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE
+                | InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        secret.setMinLines(3); secret.setMaxLines(5); secret.setMinHeight(dp(112));
+        secret.setHorizontallyScrolling(false);
+        secret.setGravity(Gravity.TOP | Gravity.START);
+        secret.setTypeface(Typeface.MONOSPACE);
+        secret.setPadding(dp(13), dp(14), dp(13), dp(14));
+        secret.setVerticalScrollBarEnabled(true);
+        add(form, muted("可分行粘贴，空格和换行会自动忽略。", 12)); gap(form, 10);
+        add(form, muted("密钥类型：基于时间 · 6 位 · 每 30 秒更新", 12));
+        ScrollView scroll = new ScrollView(this); scroll.addView(form);
+        AlertDialog popup = dialog().setTitle("输入设置密钥").setView(scroll)
+                .setNegativeButton("取消", null).setPositiveButton("添加", null).create();
+        popup.setOnShowListener(dialog -> popup.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(view -> {
+            String label = name.getText().toString().trim();
+            if (label.isEmpty()) { name.setError("请输入账号名称"); return; }
+            String normalized;
+            try { normalized = Totp.normalize(secret.getText().toString()); }
+            catch (Exception error) { secret.setError(error.getMessage()); return; }
+            int colon = label.indexOf(':');
+            String issuer = colon > 0 ? label.substring(0, colon).trim() : "";
+            String accountName = colon > 0 ? label.substring(colon + 1).trim() : label;
+            if (accountName.isEmpty()) { name.setError("请输入账号名称"); return; }
+            String key = normalized;
+            popup.dismiss();
+            String[] message = new String[1];
+            run(() -> {
+                JSONObject account = new JSONObject()
+                        .put("issuer", issuer).put("name", accountName)
+                        .put("email", accountName.matches("[^\\s@]+@[^\\s@]+\\.[^\\s@]+") ? accountName : "")
+                        .put("notes", "").put("secret", key)
+                        .put("algorithm", "SHA1").put("digits", 6).put("period", 30);
+                store.upsert(account);
+                message[0] = autoUploadNewAccounts();
+            }, () -> { render(); showSaveResult(message[0]); });
+        }));
+        popup.show();
+    }
+
     private void editAccount(JSONObject existing) {
         LinearLayout form = column(); form.setPadding(dp(18), dp(8), dp(18), dp(8));
-        EditText issuer = labeledField(form, "发行方", "例如 OpenAI", existing == null ? "" : existing.optString("issuer"), false);
-        EditText name = labeledField(form, "名称或账号", "账号名称", existing == null ? "" : existing.optString("name"), false);
-        EditText email = labeledField(form, "邮箱", "可选", existing == null ? "" : existing.optString("email"), false);
-        EditText notes = labeledField(form, "备注", "可选", existing == null ? "" : existing.optString("notes"), false);
-        EditText secret = labeledField(form, "Base32 密钥", "粘贴密钥", existing == null ? "" : existing.optString("secret"), false);
-        EditText algorithm = labeledField(form, "算法", "SHA1 / SHA256 / SHA512", existing == null ? "SHA1" : existing.optString("algorithm"), false);
-        EditText digits = labeledField(form, "验证码位数", "6 或 8", existing == null ? "6" : String.valueOf(existing.optInt("digits")), false);
-        EditText period = labeledField(form, "周期（秒）", "30", existing == null ? "30" : String.valueOf(existing.optLong("period")), false);
-        digits.setInputType(InputType.TYPE_CLASS_NUMBER); period.setInputType(InputType.TYPE_CLASS_NUMBER);
+        EditText name = labeledField(form, "账号名称", "账号名称", existing.optString("name"), false);
+        EditText email = labeledField(form, "邮箱", "可选", existing.optString("email"), false);
+        EditText issuer = labeledField(form, "分组", "例如 OpenAI", existing.optString("issuer"), false);
         ScrollView scroll = new ScrollView(this); scroll.addView(form);
-        dialog().setTitle(existing == null ? "添加账号" : "编辑账号").setView(scroll)
-                .setNegativeButton("取消", null).setPositiveButton("保存", (dialog, which) -> {
-                    String issuerValue = issuer.getText().toString(), nameValue = name.getText().toString();
-                    String emailValue = email.getText().toString(), notesValue = notes.getText().toString();
-                    String secretValue = secret.getText().toString(), algorithmValue = algorithm.getText().toString();
-                    String digitsValue = digits.getText().toString(), periodValue = period.getText().toString();
+        AlertDialog popup = dialog().setTitle("编辑账号").setView(scroll)
+                .setNegativeButton("取消", null).setPositiveButton("保存", null).create();
+        popup.setOnShowListener(dialog -> popup.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(view -> {
+                    String issuerValue = issuer.getText().toString().trim();
+                    String nameValue = name.getText().toString().trim();
+                    String emailValue = email.getText().toString().trim();
+                    if (issuerValue.isEmpty() && nameValue.isEmpty()) {
+                        name.setError("请填写账号名称或分组"); return;
+                    }
+                    popup.dismiss();
                     String[] message = new String[1];
                     run(() -> {
-                    JSONObject a = existing == null ? new JSONObject() : new JSONObject(existing.toString());
-                    a.put("issuer", issuerValue).put("name", nameValue).put("email", emailValue)
-                            .put("notes", notesValue).put("secret", secretValue)
-                            .put("algorithm", algorithmValue).put("digits", Integer.parseInt(digitsValue))
-                            .put("period", Long.parseLong(periodValue));
-                    store.upsert(a);
-                    message[0] = existing == null ? autoUploadNewAccounts() : "账号已保存；编辑后的内容可在设置中上传";
+                        JSONObject a = new JSONObject(existing.toString());
+                        a.put("issuer", issuerValue).put("name", nameValue).put("email", emailValue);
+                        store.upsert(a);
+                        message[0] = "账号已保存；编辑后的内容可在设置中上传";
                     }, () -> { render(); showSaveResult(message[0]); });
-                }).show();
+                }));
+        popup.show();
     }
 
     private void confirmDelete(JSONObject a) {
@@ -480,30 +627,35 @@ public final class MainActivity extends FragmentActivity {
     }
 
     private void menu() {
-        String[] items = {"扫描二维码", "从图片导入", "粘贴链接或文本", "从文件导入", "导出备份", "设置与同步", "锁定"};
-        dialog().setItems(items, (dialog, index) -> {
-            switch (index) {
-                case 0: scan(); break;
-                case 1: pick("image/*", PICK_IMAGE); break;
-                case 2: importDialog(); break;
-                case 3: pick("*/*", PICK_TEXT); break;
-                case 4: exportDialog(); break;
-                case 5: settingsDialog(); break;
-                case 6: store.lock(); render(); break;
-            }
-        }).show();
+        LinearLayout content = column(); content.setPadding(dp(18), dp(8), dp(18), dp(8));
+        add(content, muted("选择导入来源，或生成给另一台设备扫描的迁移二维码。", 13)); gap(content, 16);
+        AlertDialog[] popup = new AlertDialog[1];
+        menuAction(content, "从二维码图片导入", "识别相册中的账号或 Google 迁移二维码", () -> {
+            popup[0].dismiss(); pick("image/*", PICK_IMAGE);
+        });
+        menuAction(content, "从备份文件导入", "读取 JSON、TXT 或 otpauth 链接文件", () -> {
+            popup[0].dismiss(); pick("*/*", PICK_TEXT);
+        });
+        menuAction(content, "迁移到其他设备", "生成 Google 验证器兼容二维码", () -> {
+            popup[0].dismiss(); migrationDialog();
+        });
+        popup[0] = dialog().setTitle("导入与迁移").setView(content).setNegativeButton("关闭", null).create();
+        popup[0].show();
+    }
+
+    private void menuAction(LinearLayout parent, String title, String detail, Runnable action) {
+        LinearLayout card = column(); card.setPadding(dp(14), dp(12), dp(14), dp(12));
+        card.setBackground(UiStyle.rounded(style.fill, this, 11));
+        add(card, text(title, 15, true)); gap(card, 4); add(card, muted(detail, 12));
+        card.setOnClickListener(view -> action.run());
+        card.setClickable(true); card.setFocusable(true);
+        add(parent, card); gap(parent, 9);
     }
 
     private void scan() {
         new IntentIntegrator(this).setCaptureActivity(PortraitScanActivity.class)
                 .setOrientationLocked(false).setDesiredBarcodeFormats(IntentIntegrator.QR_CODE)
                 .setPrompt("").setBeepEnabled(false).initiateScan();
-    }
-
-    private void importDialog() {
-        EditText content = multiline("otpauth:// 链接、Google 转移链接或 JSON", "");
-        dialog().setTitle("导入账号").setView(content).setNegativeButton("取消", null)
-                .setPositiveButton("导入", (d, w) -> importContent(content.getText().toString())).show();
     }
 
     private void importContent(String content) {
@@ -540,11 +692,20 @@ public final class MainActivity extends FragmentActivity {
         super.onActivityResult(request, result, data);
         IntentResult scan = IntentIntegrator.parseActivityResult(request, result, data);
         if (scan != null) { if (scan.getContents() != null) importContent(scan.getContents()); return; }
-        if (result != RESULT_OK || data == null || data.getData() == null) return;
+        if (result != RESULT_OK || data == null || data.getData() == null) {
+            if (request == SAVE_IMAGE) pendingExportImage = null;
+            return;
+        }
         Uri uri = data.getData();
-        if (request == SAVE_TEXT) {
-            String value = exportText; exportText = null;
-            run(() -> { try (java.io.OutputStream out = getContentResolver().openOutputStream(uri)) { out.write(value.getBytes(StandardCharsets.UTF_8)); } }, () -> toast("已保存"));
+        if (request == SAVE_IMAGE) {
+            Bitmap image = pendingExportImage; pendingExportImage = null;
+            if (image == null) return;
+            run(() -> {
+                try (java.io.OutputStream out = getContentResolver().openOutputStream(uri)) {
+                    if (out == null || !image.compress(Bitmap.CompressFormat.PNG, 100, out))
+                        throw new IllegalStateException("保存图片失败");
+                }
+            }, () -> toast("迁移二维码图片已保存"));
         } else if (request == PICK_TEXT) {
             String[] message = new String[1];
             run(() -> {
@@ -575,37 +736,75 @@ public final class MainActivity extends FragmentActivity {
     private void showQr(JSONObject a) {
         try {
             String uri = OtpUri.export(a);
-            BitMatrix matrix = new QRCodeWriter().encode(uri, BarcodeFormat.QR_CODE, 720, 720);
-            int[] pixels = new int[720 * 720]; for (int y = 0; y < 720; y++) for (int x = 0; x < 720; x++) pixels[y * 720 + x] = matrix.get(x, y) ? Color.BLACK : Color.WHITE;
-            Bitmap bitmap = Bitmap.createBitmap(pixels, 720, 720, Bitmap.Config.ARGB_8888);
-            ImageView image = new ImageView(this); image.setImageBitmap(bitmap); image.setPadding(dp(20), dp(20), dp(20), dp(20));
+            ImageView image = new ImageView(this); image.setImageBitmap(qrBitmap(uri)); image.setPadding(dp(20), dp(20), dp(20), dp(20));
             dialog().setTitle("账号二维码").setView(image).setNegativeButton("关闭", null)
                     .setPositiveButton("复制链接", (d, w) -> copy(uri, "账号链接", 30)).show();
         } catch (Exception error) { toast(error.getMessage()); }
     }
 
-    private void exportDialog() {
-        EditText password = input("主密码", "", true);
-        dialog().setTitle("导出备份").setMessage("导出内容包含明文密钥，请妥善保管。")
-                .setView(password).setNegativeButton("取消", null).setPositiveButton("继续", (d, w) -> {
-                    String candidate = password.getText().toString();
-                    run(() -> {
-                    try { VaultCodec.decrypt(store.encryptedBytes(), candidate); }
-                    catch (Exception error) { throw new IllegalArgumentException("密码错误"); }
-                    JSONArray accounts = store.accounts(); JSONArray result = new JSONArray();
-                    for (int i = 0; i < accounts.length(); i++) {
-                        JSONObject a = accounts.getJSONObject(i);
-                        result.put(new JSONObject().put("issuer", a.getString("issuer")).put("name", a.getString("name"))
-                                .put("secret", a.getString("secret")).put("algorithm", a.getString("algorithm"))
-                                .put("digits", a.getInt("digits")).put("period", a.getLong("period"))
-                                .put("uri", OtpUri.export(a)));
-                    }
-                    exportText = result.toString(2);
-                }, () -> {
-                    Intent save = new Intent(Intent.ACTION_CREATE_DOCUMENT); save.addCategory(Intent.CATEGORY_OPENABLE);
-                    save.setType("application/json"); save.putExtra(Intent.EXTRA_TITLE, "authenticator-backup.json"); startActivityForResult(save, SAVE_TEXT);
-                    });
-                }).show();
+    private Bitmap qrBitmap(String uri) throws Exception {
+        final int size = 760;
+        BitMatrix matrix = new QRCodeWriter().encode(uri, BarcodeFormat.QR_CODE, size, size);
+        int[] pixels = new int[size * size];
+        for (int y = 0; y < size; y++) for (int x = 0; x < size; x++)
+            pixels[y * size + x] = matrix.get(x, y) ? Color.BLACK : Color.WHITE;
+        return Bitmap.createBitmap(pixels, size, size, Bitmap.Config.ARGB_8888);
+    }
+
+    private void migrationDialog() {
+        askMasterPassword("迁移到其他设备", ignored -> {
+            OtpUri.MigrationExport[] export = new OtpUri.MigrationExport[1];
+            run(() -> export[0] = OtpUri.migrationExport(store.accounts()), () -> showMigrationPages(export[0]));
+        });
+    }
+
+    private void showMigrationPages(OtpUri.MigrationExport export) {
+        if (export.pages.isEmpty()) {
+            dialog().setTitle("没有可迁移的账号")
+                    .setMessage("Google 迁移二维码仅支持标准 30 秒周期账号。其他账号可在首页逐个显示账号二维码。")
+                    .setPositiveButton("知道了", null).show();
+            return;
+        }
+        LinearLayout content = column(); content.setPadding(dp(18), dp(8), dp(18), dp(12));
+        add(content, muted("在另一台设备的 Google 验证器中选择「转移账号」并逐张扫描。", 13)); gap(content, 12);
+        if (export.excluded > 0) {
+            TextView warning = muted("有 " + export.excluded + " 个非 30 秒周期账号未包含在迁移二维码中。", 12);
+            warning.setTextColor(style.danger); add(content, warning); gap(content, 10);
+        }
+        ImageView image = new ImageView(this); image.setContentDescription("迁移二维码");
+        image.setScaleType(ImageView.ScaleType.FIT_CENTER); image.setPadding(dp(8), dp(8), dp(8), dp(8));
+        image.setBackground(UiStyle.rounded(Color.WHITE, this, 10));
+        content.addView(image, new LinearLayout.LayoutParams(-1, dp(300))); gap(content, 10);
+        TextView pageLabel = text("", 14, true); pageLabel.setGravity(Gravity.CENTER); add(content, pageLabel); gap(content, 10);
+        LinearLayout navigation = row();
+        Button previous = button("上一张", () -> {}), next = button("下一张", () -> {});
+        equal(navigation, previous); View spacer = new View(this);
+        navigation.addView(spacer, new LinearLayout.LayoutParams(dp(8), 1)); equal(navigation, next);
+        if (export.pages.size() > 1) { add(content, navigation); gap(content, 10); }
+        int[] page = {0}; Bitmap[] currentImage = new Bitmap[1];
+        Runnable update = () -> {
+            try {
+                OtpUri.MigrationPage selected = export.pages.get(page[0]);
+                currentImage[0] = qrBitmap(selected.uri); image.setImageBitmap(currentImage[0]);
+                pageLabel.setText("第 " + (page[0] + 1) + "/" + export.pages.size() + " 张 · " + selected.count + " 个账号");
+                previous.setEnabled(page[0] > 0); next.setEnabled(page[0] < export.pages.size() - 1);
+            } catch (Exception error) { toast("无法显示迁移二维码：" + error.getMessage()); }
+        };
+        previous.setOnClickListener(view -> { if (page[0] > 0) { page[0]--; update.run(); } });
+        next.setOnClickListener(view -> { if (page[0] < export.pages.size() - 1) { page[0]++; update.run(); } });
+        add(content, button("保存当前二维码图片", () -> {
+            if (currentImage[0] == null) return;
+            pendingExportImage = currentImage[0];
+            Intent save = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+            save.addCategory(Intent.CATEGORY_OPENABLE); save.setType("image/png");
+            save.putExtra(Intent.EXTRA_TITLE, "authenticator-migration-" + (page[0] + 1) + "-of-" + export.pages.size() + ".png");
+            startActivityForResult(save, SAVE_IMAGE);
+        }));
+        gap(content, 10);
+        add(content, muted("二维码含账号密钥，请只在可信设备上打开或保存。每张最多 10 个账号。", 12));
+        update.run();
+        ScrollView scroll = new ScrollView(this); scroll.addView(content);
+        dialog().setTitle("迁移到其他设备").setView(scroll).setPositiveButton("完成", null).show();
     }
 
     private void copy(String value, String label, long clearSeconds) {
@@ -691,7 +890,7 @@ public final class MainActivity extends FragmentActivity {
     }
 
     private void settingsDialog() {
-        settingsOpen = true; settingsDraft = null; render();
+        settingsOpen = true; aboutOpen = false; settingsScrollY = 0; settingsDraft = null; render();
     }
 
     private void captureSettingsDraft() {
@@ -716,6 +915,7 @@ public final class MainActivity extends FragmentActivity {
         ScrollView scroll = new ScrollView(this); scroll.setVerticalScrollBarEnabled(false);
         LinearLayout form = column(); form.setPadding(0, 0, 0, dp(24)); scroll.addView(form);
         root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
+        scroll.post(() -> scroll.scrollTo(0, settingsScrollY));
 
         add(form, sectionTitle("外观"));
         LinearLayout appearance = sectionCard(form);
@@ -810,8 +1010,83 @@ public final class MainActivity extends FragmentActivity {
         }));
         gap(passwordCard, 8); add(passwordCard, muted("修改后需要让其他设备使用新密码重新同步。", 12));
 
+        add(form, sectionTitle("关于"));
+        LinearLayout aboutCard = sectionCard(form);
+        add(aboutCard, text("关于项目", 15, true)); gap(aboutCard, 5);
+        add(aboutCard, muted("版本、检查更新、项目地址与开源许可", 12)); gap(aboutCard, 10);
+        add(aboutCard, button("查看关于项目", () -> {
+            settingsScrollY = scroll.getScrollY(); captureSettingsDraft(); aboutOpen = true; render();
+        }));
+
         gap(root, 10);
         add(root, primaryButton("保存设置", () -> saveSettings(url, user, pass, path, lock, clip, clearPass, null)));
+    }
+
+    private void renderAboutPage() {
+        LinearLayout header = row();
+        icon(header, "back", "返回设置", false, () -> { aboutOpen = false; render(); }, 40);
+        LinearLayout headings = column(); headings.setPadding(dp(6), 0, 0, 0);
+        add(headings, text("关于项目", 25, true)); add(headings, muted("Open Authenticator", 12));
+        equal(header, headings); add(root, header); gap(root, 12);
+
+        ScrollView scroll = new ScrollView(this); scroll.setVerticalScrollBarEnabled(false);
+        LinearLayout form = column(); form.setPadding(0, 0, 0, dp(24)); scroll.addView(form);
+        root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
+
+        add(form, sectionTitle("应用信息"));
+        LinearLayout app = sectionCard(form);
+        add(app, text("验证器", 18, true)); gap(app, 7);
+        add(app, muted("当前版本  v" + BuildConfig.VERSION_NAME, 13));
+
+        add(form, sectionTitle("更新"));
+        LinearLayout updates = sectionCard(form);
+        add(updates, text("检查更新", 15, true)); gap(updates, 6);
+        add(updates, muted(updateMessage.isEmpty() ? "从 GitHub Releases 检查最新正式版本" : updateMessage, 12));
+        gap(updates, 10);
+        Button check = button(updateChecking ? "正在检查…" : "检查更新", this::checkForUpdates);
+        check.setEnabled(!updateChecking); add(updates, check);
+        if (updateResult != null && updateResult.newer) {
+            gap(updates, 9);
+            add(updates, primaryButton("查看 " + updateResult.latestVersion + " Release", () -> openWeb(updateResult.releaseUrl)));
+        }
+
+        add(form, sectionTitle("项目地址"));
+        LinearLayout project = sectionCard(form);
+        add(project, muted(UpdateChecker.PROJECT_URL, 13)); gap(project, 10);
+        add(project, button("打开 GitHub 项目", () -> openWeb(UpdateChecker.PROJECT_URL)));
+
+        add(form, sectionTitle("开源许可"));
+        LinearLayout license = sectionCard(form);
+        add(license, text("MIT License", 15, true)); gap(license, 5);
+        add(license, muted("Copyright © 2026 Xunzi229", 12)); gap(license, 10);
+        add(license, button("查看 MIT 许可全文", () -> openWeb("https://opensource.org/license/mit/")));
+    }
+
+    private void checkForUpdates() {
+        if (updateChecking) return;
+        updateChecking = true; updateMessage = "正在联系 GitHub…"; updateResult = null; render();
+        worker.submit(() -> {
+            try {
+                UpdateChecker.Result found = UpdateChecker.check(BuildConfig.VERSION_NAME);
+                runOnUiThread(() -> {
+                    updateResult = found; updateChecking = false;
+                    updateMessage = found.newer ? "发现新版本 " + found.latestVersion
+                            : "已是最新版本（" + found.latestVersion + "）";
+                    if (aboutOpen) render();
+                });
+            } catch (Exception error) {
+                runOnUiThread(() -> {
+                    updateChecking = false;
+                    updateMessage = "检查失败：" + (error.getMessage() == null ? "请检查网络" : error.getMessage());
+                    if (aboutOpen) render();
+                });
+            }
+        });
+    }
+
+    private void openWeb(String url) {
+        try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url))); }
+        catch (Exception error) { toast("无法打开浏览器"); }
     }
 
     private void setDarkTheme(boolean dark) {

@@ -29,6 +29,8 @@
 
 Android 源码位于 `android/`；当前 Release 工作流尚未发布 Android 安装包。可用 Android Studio 打开该目录。
 
+本项目采用 [MIT License](LICENSE)。
+
 macOS 若为 ad-hoc 签名，首次打开需在「系统设置 → 隐私与安全性」中允许。
 
 ## 使用

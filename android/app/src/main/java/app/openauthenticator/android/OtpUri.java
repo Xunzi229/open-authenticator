@@ -1,10 +1,14 @@
 package app.openauthenticator.android;
 
 import android.net.Uri;
+import com.google.zxing.BarcodeFormat;
+import com.google.zxing.WriterException;
+import com.google.zxing.qrcode.QRCodeWriter;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
+import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
@@ -66,6 +70,91 @@ final class OtpUri {
         return "otpauth://totp/" + Uri.encode(label) + "?secret=" + Uri.encode(a.getString("secret"))
                 + "&issuer=" + Uri.encode(issuer) + "&algorithm=" + a.getString("algorithm")
                 + "&digits=" + a.getInt("digits") + "&period=" + a.getLong("period");
+    }
+
+    static final class MigrationPage {
+        final String uri;
+        final int count;
+        MigrationPage(String uri, int count) { this.uri = uri; this.count = count; }
+    }
+
+    static final class MigrationExport {
+        final List<MigrationPage> pages;
+        final int excluded;
+        MigrationExport(List<MigrationPage> pages, int excluded) {
+            this.pages = pages; this.excluded = excluded;
+        }
+    }
+
+    /** Google Authenticator migration format: at most ten accounts per QR, shrinking if needed. */
+    static MigrationExport migrationExport(JSONArray accounts) throws Exception {
+        if (accounts.length() == 0) throw new IllegalArgumentException("没有可迁移的账号");
+        List<JSONObject> supported = new ArrayList<>();
+        int excluded = 0;
+        for (int i = 0; i < accounts.length(); i++) {
+            JSONObject account = accounts.getJSONObject(i);
+            if (account.getLong("period") == 30) supported.add(account);
+            else excluded++;
+        }
+        if (supported.isEmpty()) return new MigrationExport(new ArrayList<>(), excluded);
+        long batchId = new SecureRandom().nextInt() & 0xffffffffL;
+        for (int perPage = Math.min(10, supported.size()); perPage >= 1; perPage--) {
+            List<MigrationPage> pages = new ArrayList<>();
+            int total = (supported.size() + perPage - 1) / perPage;
+            boolean fits = true;
+            for (int start = 0, index = 0; start < supported.size(); start += perPage, index++) {
+                int end = Math.min(start + perPage, supported.size());
+                String uri = migrationUri(supported.subList(start, end), index, total, batchId);
+                try { new QRCodeWriter().encode(uri, BarcodeFormat.QR_CODE, 1, 1); }
+                catch (WriterException error) { fits = false; break; }
+                pages.add(new MigrationPage(uri, end - start));
+            }
+            if (fits) return new MigrationExport(pages, excluded);
+        }
+        throw new IllegalArgumentException("账号内容过长，无法生成迁移二维码");
+    }
+
+    private static String migrationUri(List<JSONObject> accounts, int index, int total, long batchId) throws Exception {
+        ByteArrayOutputStream payload = new ByteArrayOutputStream();
+        for (JSONObject account : accounts) writeBytes(payload, 1, migrationAccountBytes(account));
+        writeNumber(payload, 2, 1);
+        writeNumber(payload, 3, total);
+        writeNumber(payload, 4, index);
+        writeNumber(payload, 5, batchId);
+        String encoded = Base64.getEncoder().encodeToString(payload.toByteArray());
+        return "otpauth-migration://offline?data=" + encoded.replace("+", "%2B");
+    }
+
+    private static byte[] migrationAccountBytes(JSONObject account) throws Exception {
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        writeBytes(output, 1, Totp.decode(Totp.normalize(account.getString("secret"))));
+        String name = account.optString("name"), issuer = account.optString("issuer");
+        if (!name.isEmpty()) writeBytes(output, 2, name.getBytes(StandardCharsets.UTF_8));
+        if (!issuer.isEmpty()) writeBytes(output, 3, issuer.getBytes(StandardCharsets.UTF_8));
+        String algorithm = account.getString("algorithm").toUpperCase(java.util.Locale.ROOT).replace("-", "");
+        writeNumber(output, 4, "SHA256".equals(algorithm) ? 2 : "SHA512".equals(algorithm) ? 3 : 1);
+        writeNumber(output, 5, account.getInt("digits") == 8 ? 2 : 1);
+        writeNumber(output, 6, 2);
+        return output.toByteArray();
+    }
+
+    private static void writeBytes(ByteArrayOutputStream output, int field, byte[] value) {
+        writeVarint(output, (field << 3) | 2);
+        writeVarint(output, value.length);
+        output.write(value, 0, value.length);
+    }
+
+    private static void writeNumber(ByteArrayOutputStream output, int field, long value) {
+        writeVarint(output, field << 3);
+        writeVarint(output, value);
+    }
+
+    private static void writeVarint(ByteArrayOutputStream output, long value) {
+        while ((value & ~0x7fL) != 0) {
+            output.write(((int) value & 0x7f) | 0x80);
+            value >>>= 7;
+        }
+        output.write((int) value);
     }
 
     private static List<JSONObject> migration(String text) throws Exception {

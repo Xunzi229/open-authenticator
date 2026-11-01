@@ -62,12 +62,18 @@ final class UiStyle {
     static final class IconButton extends View {
         private final String kind;
         private final UiStyle style;
+        private final int tint;
         private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
 
         IconButton(Context context, UiStyle style, String kind, String description, boolean filled, Runnable action) {
+            this(context, style, kind, description, filled, action, style.icon);
+        }
+
+        IconButton(Context context, UiStyle style, String kind, String description, boolean filled, Runnable action, int tint) {
             super(context);
             this.kind = kind;
             this.style = style;
+            this.tint = tint;
             setContentDescription(description);
             setFocusable(true);
             setClickable(true);
@@ -81,7 +87,7 @@ final class UiStyle {
             canvas.save();
             canvas.translate(getWidth() / 2f - 12 * unit, getHeight() / 2f - 12 * unit);
             canvas.scale(unit, unit);
-            paint.setColor(style.icon);
+            paint.setColor(tint);
             paint.setStyle(Paint.Style.STROKE);
             paint.setStrokeWidth(1.8f);
             paint.setStrokeCap(Paint.Cap.ROUND);
