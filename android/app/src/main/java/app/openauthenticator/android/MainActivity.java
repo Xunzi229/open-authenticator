@@ -410,7 +410,14 @@ public final class MainActivity extends FragmentActivity {
             emailView.setOnClickListener(v -> { copy(email, "邮箱", store.settings().optLong("clipboard_clear_seconds", 30)); toast("已复制邮箱"); });
             add(meta, emailView);
         }
+        String notes = a.optString("notes");
+        if (!notes.isEmpty()) {
+            TextView noteView = muted(notes, 11); noteView.setSingleLine(true);
+            noteView.setEllipsize(android.text.TextUtils.TruncateAt.END); add(meta, noteView);
+        }
         top.addView(meta, new LinearLayout.LayoutParams(0, -2, 1));
+        icon(top, "copy", "复制验证码", false, () -> copyCode(a), 30);
+        icon(top, "qr", "账号二维码", false, () -> showQr(a), 30);
         add(item, top);
         TextView code = text(a.optInt("digits") == 8 ? "•••• ••••" : "••• •••", 32, true);
         code.setTypeface(Typeface.MONOSPACE, Typeface.BOLD); code.setTextColor(style.hidden);
@@ -427,18 +434,6 @@ public final class MainActivity extends FragmentActivity {
         LinearLayout.LayoutParams codeLayout = new LinearLayout.LayoutParams(-1, -2);
         codeLayout.leftMargin = dp(45);
         item.addView(code, codeLayout); codeViews.add(code);
-        LinearLayout actions = row(); actions.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
-        String notes = a.optString("notes");
-        if (!notes.isEmpty()) {
-            TextView noteView = muted(notes, 11); noteView.setSingleLine(true);
-            noteView.setEllipsize(android.text.TextUtils.TruncateAt.END);
-            actions.addView(noteView, new LinearLayout.LayoutParams(0, -2, 1));
-        } else {
-            View spacer = new View(this); actions.addView(spacer, new LinearLayout.LayoutParams(0, 1, 1));
-        }
-        icon(actions, "copy", "复制验证码", false, () -> copyCode(a), 30);
-        icon(actions, "qr", "账号二维码", false, () -> showQr(a), 30);
-        add(item, actions);
         return new SwipeAccountLayout(item, a, title);
     }
 
