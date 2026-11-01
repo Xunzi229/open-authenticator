@@ -462,10 +462,20 @@ public final class MainActivity extends FragmentActivity {
         LinearLayout form = column(); form.setPadding(dp(18), dp(8), dp(18), dp(10));
         add(form, muted("输入账号名称和设置密钥，即可添加标准时间验证码。", 13)); gap(form, 16);
         EditText name = labeledField(form, "账号名称", "例如 GitHub:you@example.com", "", false);
-        EditText secret = labeledField(form, "设置密钥", "输入 Base32 密钥", "", false);
-        secret.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        EditText secret = labeledField(form, "设置密钥", "粘贴 Base32 密钥", "", false);
+        secret.setSingleLine(false);
+        secret.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE
+                | InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        secret.setMinLines(3); secret.setMaxLines(5); secret.setMinHeight(dp(112));
+        secret.setHorizontallyScrolling(false);
+        secret.setGravity(Gravity.TOP | Gravity.START);
+        secret.setTypeface(Typeface.MONOSPACE);
+        secret.setPadding(dp(13), dp(14), dp(13), dp(14));
+        secret.setVerticalScrollBarEnabled(true);
+        add(form, muted("可分行粘贴，空格和换行会自动忽略。", 12)); gap(form, 10);
         add(form, muted("密钥类型：基于时间 · 6 位 · 每 30 秒更新", 12));
-        AlertDialog popup = dialog().setTitle("输入设置密钥").setView(form)
+        ScrollView scroll = new ScrollView(this); scroll.addView(form);
+        AlertDialog popup = dialog().setTitle("输入设置密钥").setView(scroll)
                 .setNegativeButton("取消", null).setPositiveButton("添加", null).create();
         popup.setOnShowListener(dialog -> popup.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(view -> {
             String label = name.getText().toString().trim();
