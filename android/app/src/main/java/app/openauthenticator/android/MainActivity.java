@@ -441,14 +441,16 @@ public final class MainActivity extends FragmentActivity {
             setClipChildren(true);
             setClickable(true);
             setContentDescription(title + "，右滑编辑，左滑移除");
+            LinearLayout actions = row();
             TextView edit = text("编辑", 14, true);
             edit.setTextColor(Color.WHITE); edit.setGravity(Gravity.CENTER);
             edit.setBackgroundColor(style.accent);
-            addView(edit, new FrameLayout.LayoutParams(dp(88), -1, Gravity.START));
+            actions.addView(edit, new LinearLayout.LayoutParams(0, -1, 1));
             TextView remove = text("移除", 14, true);
             remove.setTextColor(Color.WHITE); remove.setGravity(Gravity.CENTER);
             remove.setBackgroundColor(style.danger);
-            addView(remove, new FrameLayout.LayoutParams(dp(88), -1, Gravity.END));
+            actions.addView(remove, new LinearLayout.LayoutParams(0, -1, 1));
+            addView(actions, new FrameLayout.LayoutParams(-1, -1));
             content.setBackgroundColor(style.surface);
             addView(content, new FrameLayout.LayoutParams(-1, -2));
         }
@@ -475,16 +477,18 @@ public final class MainActivity extends FragmentActivity {
                 case MotionEvent.ACTION_MOVE:
                     if (swiping) {
                         float dx = event.getX() - startX;
-                        content.setTranslationX(Math.max(-dp(88), Math.min(dp(88), dx)));
+                        float limit = getWidth() / 2f;
+                        content.setTranslationX(Math.max(-limit, Math.min(limit, dx)));
                         return true;
                     }
                     break;
                 case MotionEvent.ACTION_UP:
                     if (swiping) {
-                        float distance = content.getTranslationX();
+                        float distance = event.getX() - startX;
+                        float required = getWidth() / 2f;
                         content.animate().translationX(0).setDuration(140).withEndAction(() -> {
-                            if (distance <= -dp(64)) confirmDelete(account);
-                            else if (distance >= dp(64)) editAccount(account);
+                            if (distance <= -required) confirmDelete(account);
+                            else if (distance >= required) editAccount(account);
                         }).start();
                         swiping = false;
                         return true;
