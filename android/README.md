@@ -34,6 +34,8 @@ Google 迁移二维码仅支持标准 30 秒周期账号。非标准周期账号
 
 用 Android Studio 打开 `android/` 目录，让 IDE 安装所需的 Android SDK 35 和 Gradle 8.9，然后运行 `app`。命令行也可在该目录运行 `gradlew.bat :app:assembleDebug`（Windows）或 `sh gradlew :app:assembleDebug`（macOS / Linux）。本仓库不包含已构建安装包。
 
+正式版本页面提供固定调试签名的 Android APK，可覆盖安装此前同签名的测试包。APK 由 GitHub Actions 远程构建并校验签名；安装前建议备份保险库。
+
 GitHub Actions 手动运行 `Cross-platform CI` 可生成 7 天有效的调试 APK。工作流从仓库 Secrets 读取固定签名密钥：`ANDROID_DEBUG_KEYSTORE_BASE64`、`ANDROID_DEBUG_STORE_PASSWORD`、`ANDROID_DEBUG_KEY_ALIAS`、`ANDROID_DEBUG_KEY_PASSWORD`。请长期备份原始 keystore 和密码；更换密钥后，旧安装包无法直接覆盖安装，须先备份应用数据。执行本地构建时如需与 CI 包互相覆盖安装，须设置同名环境变量，其中 `ANDROID_DEBUG_KEYSTORE` 指向原始 keystore 文件。
 
 开启免密码进入后，应用启动时会使用 Android 密钥库保存的凭据解锁，空闲自动锁定在本机暂停；关闭后恢复原设置。指纹解锁需要设备录入强生物识别。Android 端没有后台自动同步。

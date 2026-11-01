@@ -35,8 +35,9 @@
 | Windows | `.msi`，另有 portable `.zip` |
 | macOS | Apple Silicon / Intel `.dmg` |
 | Linux | 由 Release 提供的桌面包 |
+| Android | 固定签名的 `.apk`（Android 8.0 或更高版本） |
 
-Android 源码位于 `android/`；当前 Release 工作流尚未发布 Android 安装包。可用 Android Studio 打开该目录。
+Android 源码位于 `android/`。Release 页面中的 Android APK 使用固定调试签名，可覆盖安装此前同签名的测试包；安装前建议备份保险库。
 
 本项目采用 [MIT License](LICENSE)。
 
